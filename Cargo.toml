@@ -1,0 +1,12 @@
+[package]
+name = "perfect-limiter"
+version = "0.1.0"
+edition = "2024"
+authors = ["Sytronik <sytronik210@gmail.com>"]
+description = "A look-ahead brick-wall audio limiter"
+license = "MIT"
+keywords = ["audio", "dsp", "limiter"]
+categories = ["multimedia::audio"]
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -5,6 +5,9 @@
 
 mod envelope;
 
+#[cfg(feature = "python")]
+mod python;
+
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 

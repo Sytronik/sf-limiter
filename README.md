@@ -10,11 +10,16 @@ to its attack-time look-ahead.
 
 ## Python 3.11+
 
-Build and install the package from the repository with:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
+create the Python 3.11 virtual environment and install the package with:
 
 ```shell
-python -m pip install .
+uv sync --no-dev
 ```
+
+`uv` installs a compatible Python 3.11 interpreter when needed, creates the
+project's `.venv`, builds the Rust extension, and installs the locked
+dependencies.
 
 Limit a mono NumPy array:
 
@@ -106,10 +111,10 @@ Run the Rust tests:
 cargo test
 ```
 
-Build the Python extension in a Python 3.11+ virtual environment and run its
-tests:
+Create the Python environment with the test dependencies, build the extension,
+and run its tests:
 
 ```shell
-python -m pip install --editable '.[test]'
-python -m pytest -q
+uv sync
+uv run pytest -q
 ```

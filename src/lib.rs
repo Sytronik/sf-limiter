@@ -2,6 +2,9 @@
 //!
 //! `PerfectLimiter` accepts frame-interleaved `f32` audio. It computes one gain
 //! value per frame across every channel, so the stereo image is preserved.
+//!
+//! The design was informed by Geraint Luff's article
+//! [“Designing a straightforward limiter”](https://signalsmith-audio.co.uk/writing/2022/limiter/).
 
 mod envelope;
 

@@ -6,6 +6,7 @@ build-backend = "maturin"
 name = "perfect-limiter"
 version = "0.1.0"
 description = "Python bindings for a look-ahead brick-wall audio limiter"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = ["numpy>=1.23"]

@@ -1,23 +1,26 @@
 [build-system]
-requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
+requires = ["maturin>=1.9,<2"]
 
 [project]
-name = "perfect-limiter"
-version = "0.1.0"
-description = "Python bindings for a look-ahead brick-wall audio limiter"
-readme = "README.md"
-requires-python = ">=3.11"
-license = "MIT"
-dependencies = ["numpy>=1.23"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Rust",
 ]
+dependencies = ["numpy>=1.23"]
+description = "Python bindings for a look-ahead brick-wall audio limiter"
+license = "MIT"
+name = "perfect-limiter"
+readme = "README.md"
+requires-python = ">=3.11"
+version = "0.1.0"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+  "pytest>=8",
+  "ruff~=0.16.1",
+]
 
 [tool.maturin]
 bindings = "pyo3"

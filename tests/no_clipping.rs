@@ -1,4 +1,4 @@
-use perfect_limiter::PerfectLimiter;
+use sf_limiter::SFLimiter;
 
 fn assert_never_clips(samples: &[f32], ceiling: f32) {
     assert!(
@@ -24,7 +24,7 @@ fn adversarial_mono_signal_never_clips() {
         };
     }
 
-    let mut limiter = PerfectLimiter::with_default(48_000).unwrap();
+    let mut limiter = SFLimiter::with_default(48_000).unwrap();
     let output = limiter.process_interleaved(&input, 1).unwrap();
 
     assert_eq!(output.samples.len(), input.len());
@@ -53,7 +53,7 @@ fn linked_multichannel_signal_never_clips() {
         }
     }
 
-    let mut limiter = PerfectLimiter::new(48_000, 0.8, 5.0, 15.0, 40.0).unwrap();
+    let mut limiter = SFLimiter::new(48_000, 0.8, 5.0, 15.0, 40.0).unwrap();
     let output = limiter.process_interleaved(&input, channels).unwrap();
 
     assert_eq!(output.gains.len(), frames);
@@ -63,7 +63,7 @@ fn linked_multichannel_signal_never_clips() {
 #[test]
 fn processing_in_place_has_the_same_hard_ceiling() {
     let mut audio = vec![4.0, -3.0, 2.0, -5.0, 0.25, -0.25];
-    let mut limiter = PerfectLimiter::new(1_000, 1.0, 1.0, 0.0, 0.0).unwrap();
+    let mut limiter = SFLimiter::new(1_000, 1.0, 1.0, 0.0, 0.0).unwrap();
 
     let gains = limiter.process_interleaved_inplace(&mut audio, 2).unwrap();
 

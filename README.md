@@ -1,6 +1,6 @@
-# perfect-limiter
+# sf-limiter
 
-`perfect-limiter` is a look-ahead brick-wall audio limiter with a
+`sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall audio limiter with a
 dependency-free Rust core and optional Python bindings for NumPy.
 
 It applies one linked gain value to every channel in a frame, preserving the
@@ -25,10 +25,10 @@ Limit a mono NumPy array:
 
 ```python
 import numpy as np
-import perfect_limiter
+import sf_limiter
 
 audio = np.array([0.0, 0.5, 3.0, -4.0, 0.25], dtype=np.float64)
-limited, gains = perfect_limiter.limit(audio, sample_rate=48_000)
+limited, gains = sf_limiter.limit(audio, sample_rate=48_000)
 
 assert limited.dtype == np.float32
 assert np.max(np.abs(limited), initial=0.0) <= 1.0
@@ -45,7 +45,7 @@ The one-shot `limit` function accepts these keyword parameters:
 For repeated use, configure a limiter object once:
 
 ```python
-limiter = perfect_limiter.PerfectLimiter(
+limiter = sf_limiter.SFLimiter(
     48_000,
     threshold=0.95,
     attack_ms=5.0,
@@ -69,14 +69,14 @@ configuration values raise `ValueError`.
 The core Rust API processes frame-interleaved `f32` samples:
 
 ```rust
-use perfect_limiter::PerfectLimiter;
+use sf_limiter::SFLimiter;
 
 let input = [0.0, 0.5, 3.0, -4.0, 0.25];
-let mut limiter = PerfectLimiter::with_default(48_000)?;
+let mut limiter = SFLimiter::with_default(48_000)?;
 let output = limiter.process_interleaved(&input, 1)?;
 
 assert!(output.samples.iter().all(|sample| sample.abs() <= 1.0));
-# Ok::<(), perfect_limiter::LimiterError>(())
+# Ok::<(), sf_limiter::LimiterError>(())
 ```
 
 Use `process_interleaved_inplace` to reuse the input allocation. Both methods
@@ -100,7 +100,7 @@ The limiter design was informed by Geraint Luff's
 article's look-ahead structure: a moving minimum of permissible gain, an
 exponential release, and finite-length cascaded box-filter smoothing.
 
-The Rust implementation was extracted from the `PerfectLimiter` used by
+The Rust implementation was extracted from the `SFLimiter` used by
 `thesia-tauri` and adapted into a standalone crate with a dependency-free core.
 
 ## Development

@@ -1,6 +1,6 @@
 //! A dependency-free look-ahead brick-wall limiter core.
 //!
-//! `PerfectLimiter` accepts frame-interleaved `f32` audio. It computes one gain
+//! `SFLimiter` accepts frame-interleaved `f32` audio. It computes one gain
 //! value per frame across every channel, so the stereo image is preserved.
 //!
 //! The design was informed by Geraint Luff's article
@@ -16,7 +16,7 @@ use std::fmt::{self, Display, Formatter};
 
 use envelope::{BoxStackFilter, ExponentialRelease, MovingMinimum};
 
-/// Validation and input errors returned by [`PerfectLimiter`].
+/// Validation and input errors returned by [`SFLimiter`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum LimiterError {
     InvalidSampleRate,
@@ -94,7 +94,7 @@ pub struct LimiterOutput {
 
 /// A look-ahead limiter with a finite-length, smoothly varying gain envelope.
 #[derive(Clone, Debug)]
-pub struct PerfectLimiter {
+pub struct SFLimiter {
     sample_rate: u32,
     threshold: f64,
     attack_samples: usize,
@@ -104,7 +104,7 @@ pub struct PerfectLimiter {
     smoother: BoxStackFilter,
 }
 
-impl PerfectLimiter {
+impl SFLimiter {
     /// Builds a limiter from times expressed in milliseconds.
     ///
     /// `threshold` must be in `(0, 1]`. `attack_ms` must round to at least one
@@ -313,22 +313,22 @@ mod tests {
     #[test]
     fn rejects_invalid_configuration() {
         assert_eq!(
-            PerfectLimiter::with_default(0).unwrap_err(),
+            SFLimiter::with_default(0).unwrap_err(),
             LimiterError::InvalidSampleRate
         );
         assert!(matches!(
-            PerfectLimiter::new(48_000, 1.1, 5.0, 15.0, 40.0),
+            SFLimiter::new(48_000, 1.1, 5.0, 15.0, 40.0),
             Err(LimiterError::InvalidThreshold(1.1))
         ));
         assert!(matches!(
-            PerfectLimiter::new(48_000, 1.0, 0.0, 15.0, 40.0),
+            SFLimiter::new(48_000, 1.0, 0.0, 15.0, 40.0),
             Err(LimiterError::AttackTooShort { .. })
         ));
     }
 
     #[test]
     fn rejects_non_finite_audio() {
-        let mut limiter = PerfectLimiter::with_default(48_000).unwrap();
+        let mut limiter = SFLimiter::with_default(48_000).unwrap();
         let error = limiter
             .process_interleaved(&[0.0, f32::NAN], 1)
             .unwrap_err();
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn empty_audio_is_supported() {
-        let mut limiter = PerfectLimiter::with_default(48_000).unwrap();
+        let mut limiter = SFLimiter::with_default(48_000).unwrap();
         let output = limiter.process_interleaved(&[], 2).unwrap();
         assert!(output.samples.is_empty());
         assert!(output.gains.is_empty());

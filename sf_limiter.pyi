@@ -5,8 +5,9 @@ from numpy.typing import ArrayLike, NDArray
 
 _ProcessOutput: TypeAlias = tuple[NDArray[np.float32], NDArray[np.float32]]
 
+
 @final
-class PerfectLimiter:
+class SFLimiter:
     def __init__(
         self,
         sample_rate: int,
@@ -27,6 +28,7 @@ class PerfectLimiter:
     def hold_samples(self) -> int: ...
     @property
     def release_samples(self) -> float: ...
+
 
 def limit(
     audio: ArrayLike,

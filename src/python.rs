@@ -3,17 +3,17 @@ use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArrayDyn, PyArrayLikeDyn};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::{LimiterError, LimiterOutput, PerfectLimiter};
+use crate::{LimiterError, LimiterOutput, SFLimiter};
 
 type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, PyArray1<f32>>)>;
 
-#[pyclass(name = "PerfectLimiter", module = "perfect_limiter")]
-struct PyPerfectLimiter {
-    inner: PerfectLimiter,
+#[pyclass(name = "SFLimiter", module = "sf_limiter")]
+struct PySFLimiter {
+    inner: SFLimiter,
 }
 
 #[pymethods]
-impl PyPerfectLimiter {
+impl PySFLimiter {
     #[new]
     #[pyo3(signature = (
         sample_rate,
@@ -30,7 +30,7 @@ impl PyPerfectLimiter {
         release_ms: f64,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: PerfectLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
+            inner: SFLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
                 .map_err(value_error)?,
         })
     }
@@ -77,7 +77,7 @@ impl PyPerfectLimiter {
 
     fn __repr__(&self) -> String {
         format!(
-            "PerfectLimiter(sample_rate={}, threshold={}, latency_samples={})",
+            "SFLimiter(sample_rate={}, threshold={}, latency_samples={})",
             self.inner.sample_rate(),
             self.inner.threshold(),
             self.inner.latency_samples()
@@ -107,14 +107,14 @@ fn limit<'py>(
     release_ms: f64,
     channel_axis: isize,
 ) -> PyProcessOutput<'py> {
-    let mut limiter = PerfectLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
+    let mut limiter = SFLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
         .map_err(value_error)?;
     process_numpy(py, &mut limiter, audio.as_array(), channel_axis)
 }
 
 fn process_numpy<'py>(
     py: Python<'py>,
-    limiter: &mut PerfectLimiter,
+    limiter: &mut SFLimiter,
     audio: ArrayViewD<'_, f32>,
     channel_axis: isize,
 ) -> PyProcessOutput<'py> {
@@ -194,9 +194,9 @@ fn value_error(error: LimiterError) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
-#[pymodule(name = "perfect_limiter")]
+#[pymodule(name = "sf_limiter")]
 fn python_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<PyPerfectLimiter>()?;
+    module.add_class::<PySFLimiter>()?;
     module.add_function(wrap_pyfunction!(limit, module)?)?;
     Ok(())
 }

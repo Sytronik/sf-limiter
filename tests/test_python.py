@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-import perfect_limiter
+import sf_limiter
 
 
 def assert_never_clips(audio: np.ndarray, ceiling: float = 1.0) -> None:
@@ -15,7 +15,7 @@ def test_float64_mono_input_never_clips() -> None:
     audio[::997] = 32.0
     original = audio.copy()
 
-    output, gains = perfect_limiter.limit(audio, sample_rate=48_000)
+    output, gains = sf_limiter.limit(audio, sample_rate=48_000)
 
     assert output.shape == audio.shape
     assert output.dtype == np.float32
@@ -30,7 +30,7 @@ def test_frame_major_multichannel_input_never_clips() -> None:
     audio = rng.normal(0.0, 12.0, size=(24_000, 6)).astype(np.float32)
     audio[::4093, :] = 64.0
 
-    limiter = perfect_limiter.PerfectLimiter(
+    limiter = sf_limiter.SFLimiter(
         48_000,
         threshold=0.8,
         attack_ms=5.0,
@@ -51,7 +51,7 @@ def test_channel_major_shape_is_preserved() -> None:
         dtype=np.float32,
     )
 
-    output, gains = perfect_limiter.limit(
+    output, gains = sf_limiter.limit(
         audio,
         sample_rate=1_000,
         attack_ms=1.0,
@@ -67,4 +67,4 @@ def test_channel_major_shape_is_preserved() -> None:
 
 def test_invalid_dimensions_are_rejected() -> None:
     with pytest.raises(ValueError, match="1D or 2D"):
-        perfect_limiter.limit(np.zeros((2, 3, 4)), sample_rate=48_000)
+        sf_limiter.limit(np.zeros((2, 3, 4)), sample_rate=48_000)

@@ -7,6 +7,22 @@ use crate::{LimiterError, SFLimiter};
 
 type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, PyArray1<f32>>)>;
 
+/// A configurable look-ahead brick-wall limiter.
+///
+/// The limiter applies one linked gain value to all channels in each frame,
+/// preserving their relative balance. Processing is offline and every call
+/// starts with a neutral gain envelope.
+///
+/// Args:
+///     sample_rate: Sample rate in hertz. Must be greater than zero.
+///     threshold: Maximum absolute output sample, in ``(0, 1]``.
+///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
+///         least one sample at ``sample_rate``.
+///     hold_ms: Hold time in milliseconds. May be zero.
+///     release_ms: Release time in milliseconds. May be zero.
+///
+/// Raises:
+///     ValueError: If any configuration value is invalid.
 #[pyclass(name = "SFLimiter", module = "sf_limiter")]
 struct PySFLimiter {
     inner: SFLimiter,
@@ -15,6 +31,7 @@ struct PySFLimiter {
 #[pymethods]
 impl PySFLimiter {
     #[new]
+    /// Create a limiter with the requested ceiling and envelope timing.
     #[pyo3(signature = (
         sample_rate,
         threshold = 1.0,
@@ -35,7 +52,27 @@ impl PySFLimiter {
         })
     }
 
-    /// Process mono or multichannel NumPy audio and return `(audio, gains)`.
+    /// Process mono or multichannel audio.
+    ///
+    /// Args:
+    ///     audio: A one-dimensional mono array or a two-dimensional
+    ///         multichannel array. Values are converted to ``numpy.float32``;
+    ///         the input is not modified.
+    ///     channel_axis: Channel axis for two-dimensional input. The default
+    ///         of ``-1`` expects ``(frames, channels)``. Use ``0`` for
+    ///         ``(channels, frames)``. For mono input, ``0`` and ``-1`` are
+    ///         equivalent.
+    ///
+    /// Returns:
+    ///     A tuple ``(audio, gains)``. ``audio`` is a new ``numpy.float32``
+    ///     array with the same shape as the input. ``gains`` is a
+    ///     one-dimensional ``numpy.float32`` array containing one linked gain
+    ///     value per frame.
+    ///
+    /// Raises:
+    ///     ValueError: If the input is not one- or two-dimensional, the
+    ///         channel axis is invalid, the channel dimension is empty, or an
+    ///         input sample is not finite.
     #[pyo3(signature = (audio, channel_axis = -1))]
     fn process<'py>(
         &mut self,
@@ -46,31 +83,37 @@ impl PySFLimiter {
         process_numpy(py, &mut self.inner, audio.as_array(), channel_axis)
     }
 
+    /// Restore the internal gain envelope to its neutral state.
     fn reset(&mut self) {
         self.inner.reset();
     }
 
     #[getter]
+    /// int: Configured sample rate in hertz.
     fn sample_rate(&self) -> u32 {
         self.inner.sample_rate()
     }
 
     #[getter]
+    /// float: Configured maximum absolute output sample.
     fn threshold(&self) -> f64 {
         self.inner.threshold()
     }
 
     #[getter]
+    /// int: Look-ahead latency in samples.
     fn latency_samples(&self) -> usize {
         self.inner.latency_samples()
     }
 
     #[getter]
+    /// int: Configured hold duration in samples.
     fn hold_samples(&self) -> usize {
         self.inner.hold_samples()
     }
 
     #[getter]
+    /// float: Configured release duration in samples.
     fn release_samples(&self) -> f64 {
         self.inner.release_samples()
     }
@@ -85,7 +128,31 @@ impl PySFLimiter {
     }
 }
 
-/// Limit a NumPy array in one call and return `(audio, gains)`.
+/// Limit mono or multichannel audio in one call.
+///
+/// Args:
+///     audio: A one-dimensional mono array or a two-dimensional multichannel
+///         array. Values are converted to ``numpy.float32``; the input is not
+///         modified.
+///     sample_rate: Sample rate in hertz. Must be greater than zero.
+///     threshold: Maximum absolute output sample, in ``(0, 1]``.
+///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
+///         least one sample at ``sample_rate``.
+///     hold_ms: Hold time in milliseconds. May be zero.
+///     release_ms: Release time in milliseconds. May be zero.
+///     channel_axis: Channel axis for two-dimensional input. The default of
+///         ``-1`` expects ``(frames, channels)``. Use ``0`` for
+///         ``(channels, frames)``. For mono input, ``0`` and ``-1`` are
+///         equivalent.
+///
+/// Returns:
+///     A tuple ``(audio, gains)``. ``audio`` is a new ``numpy.float32`` array
+///     with the same shape as the input. ``gains`` is a one-dimensional
+///     ``numpy.float32`` array containing one linked gain value per frame.
+///
+/// Raises:
+///     ValueError: If a configuration value or input is invalid, or an input
+///         sample is not finite.
 #[pyfunction]
 #[pyo3(signature = (
     audio,
@@ -194,6 +261,7 @@ fn value_error(error: LimiterError) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
+/// Python bindings for the sf-limiter look-ahead brick-wall audio limiter.
 #[pymodule(name = "sf_limiter")]
 fn python_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySFLimiter>()?;

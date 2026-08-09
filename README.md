@@ -1,7 +1,10 @@
-# sf-limiter
+# sf-limiter (WIP)
 
 `sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall audio limiter with a
 dependency-free Rust core and optional Python bindings for NumPy.
+
+> **Note:** The limiter algorithm itself was not AI-generated. Codex assisted only with
+> documentation and packaging-related work.
 
 It applies one linked gain value to every channel in a frame, preserving the
 relative balance between channels. Processing is offline: the output has the
@@ -100,8 +103,7 @@ The limiter design was informed by Geraint Luff's
 article's look-ahead structure: a moving minimum of permissible gain, an
 exponential release, and finite-length cascaded box-filter smoothing.
 
-The Rust implementation was extracted from the `SFLimiter` used by
-`thesia-tauri` and adapted into a standalone crate with a dependency-free core.
+The Rust implementation was extracted from `limiter.rs` in [thesia](https://github.com/Sytronik/thesia) and adapted into a standalone crate with a dependency-free core.
 
 ## Development
 

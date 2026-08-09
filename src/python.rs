@@ -3,7 +3,7 @@ use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArrayDyn, PyArrayLikeDyn};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::{LimiterError, LimiterOutput, SFLimiter};
+use crate::{LimiterError, SFLimiter};
 
 type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, PyArray1<f32>>)>;
 
@@ -119,7 +119,7 @@ fn process_numpy<'py>(
     channel_axis: isize,
 ) -> PyProcessOutput<'py> {
     let shape = audio.shape().to_vec();
-    let (interleaved, channels, normalized_axis) = match audio.ndim() {
+    let (mut interleaved, channels, normalized_axis) = match audio.ndim() {
         1 => {
             normalize_channel_axis(channel_axis, 1)?;
             (audio.iter().copied().collect(), 1, 0)
@@ -154,21 +154,21 @@ fn process_numpy<'py>(
         }
     };
 
-    let LimiterOutput { samples, gains } = limiter
-        .process_interleaved(&interleaved, channels)
+    let gains = limiter
+        .process_interleaved_inplace(&mut interleaved, channels)
         .map_err(value_error)?;
 
     let shaped_samples = if shape.len() == 2 && normalized_axis == 0 {
         let frames = shape[1];
-        let mut channel_major = Vec::with_capacity(samples.len());
+        let mut channel_major = Vec::with_capacity(interleaved.len());
         for channel in 0..channels {
             for frame in 0..frames {
-                channel_major.push(samples[frame * channels + channel]);
+                channel_major.push(interleaved[frame * channels + channel]);
             }
         }
         channel_major
     } else {
-        samples
+        interleaved
     };
 
     let output = ArrayD::from_shape_vec(IxDyn(&shape), shaped_samples)

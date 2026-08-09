@@ -134,17 +134,17 @@ fn process_numpy<'py>(
                 ));
             }
 
-            let mut interleaved = Vec::with_capacity(audio.len());
-            for frame in 0..frames {
-                for channel in 0..channels {
-                    let index = if axis == 0 {
-                        [channel, frame]
-                    } else {
-                        [frame, channel]
-                    };
-                    interleaved.push(audio[index]);
+            let interleaved = if axis == 1 {
+                audio.iter().copied().collect()
+            } else {
+                let mut interleaved = Vec::with_capacity(audio.len());
+                for frame in 0..frames {
+                    for channel in 0..channels {
+                        interleaved.push(audio[[channel, frame]]);
+                    }
                 }
-            }
+                interleaved
+            };
             (interleaved, channels, axis)
         }
         dimensions => {

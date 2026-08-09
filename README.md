@@ -120,3 +120,15 @@ and run its tests:
 uv sync
 uv run pytest -q
 ```
+
+Compare the Python API performance with
+[`numpy-audio-limiter`](https://github.com/iver56/numpy-audio-limiter):
+
+```shell
+uv sync --group benchmark
+uv run --group benchmark python benchmarks/compare_numpy_audio_limiter.py
+```
+
+The benchmark measures reusable and one-shot `sf_limiter` calls separately.
+Use `--help` to select durations, channel counts, timing repetitions, and
+limiter settings.

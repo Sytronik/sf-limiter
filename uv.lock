@@ -161,36 +161,27 @@ wheels = [
 ]
 
 [[package]]
+name = "numpy-audio-limiter"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/a9/dee6ac17f6a080ae3dbec19f499af49d3cb310ad2016888bca06dfcca1c9/numpy_audio_limiter-0.2.0.tar.gz", hash = "sha256:a7470aa3e56daebd0a1bd87758983ae383525c603c84d6a2e54e236f435273be", size = 9989, upload-time = "2025-12-01T20:53:10.95Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/f0/23a05a5f95c9ed7f19eb6a89ea0779e2d8bac186456ba39297dbc4db45f6/numpy_audio_limiter-0.2.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:51603f8ebc8922d0da8828cd958fb40c9fd44720727fc06a4012689f5321c5db", size = 267428, upload-time = "2025-12-01T20:53:01.844Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/c0/08170e1488d954c1b4571818607730745e3c5a4ff95098fafbcc8f0f2dd4/numpy_audio_limiter-0.2.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e1a6556a26e64964db922bda24e8d043a0759375d47a976509ec3687eb998ceb", size = 301285, upload-time = "2025-12-01T20:53:03.362Z" },
+    { url = "https://files.pythonhosted.org/packages/66/0e/9407c0a6420fa1d2794c2f08b98d60f89d01e991c28658ea1b794680b678/numpy_audio_limiter-0.2.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d414c4c9101e47666c06118f942a5aea0c4fb55a2ec823dad1421d517fddd42e", size = 313537, upload-time = "2025-12-01T20:53:04.576Z" },
+    { url = "https://files.pythonhosted.org/packages/39/39/bddc29727fe4ed81818f7c898b695c76a84e6c1c0f5fec2492c0acf0a031/numpy_audio_limiter-0.2.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:ced8691187e911d57e4833e53f7ba7d1f242b8b7d0c72c7bd29f234a7b5cf9e2", size = 482905, upload-time = "2025-12-01T20:53:05.836Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/5e/807dcb11af85d96cfe1c5501e13c8a87d8e6ccd6ff7fc8483d2884cfb93e/numpy_audio_limiter-0.2.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:741b70ad3880e8c0fd52cd5a81097827127b6c3f6f40a907e6bf5c7e802d0a9b", size = 475986, upload-time = "2025-12-01T20:53:07.287Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/07/a6f87822f425bdac576af5482d47b286db155b129757f1717005be60b1fa/numpy_audio_limiter-0.2.0-cp310-abi3-win_amd64.whl", hash = "sha256:80eee1e35059dbf42bf66f3291e78b0df49adb0aff9ca2fb81632ef0f2a4638a", size = 155575, upload-time = "2025-12-01T20:53:08.302Z" },
+    { url = "https://files.pythonhosted.org/packages/06/6d/c1b11a5440eb6154a302d722cf10749fe0dd4199cd818ec92177dc9fd4a1/numpy_audio_limiter-0.2.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c445e6cab775e7df8ccb1d156a22cc2e9881af91f45a6414be922e68e570a5a8", size = 309440, upload-time = "2025-12-01T20:53:09.542Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7d/fa/3944b40b07da9ce895c0e6303a5ab7d53da063554f534556b134a54d6093/packaging-26.3.tar.gz", hash = "sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79", size = 313412, upload-time = "2026-08-04T18:15:28.737Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl", hash = "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c", size = 129956, upload-time = "2026-08-04T18:15:27.159Z" },
-]
-
-[[package]]
-name = "sf-limiter"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "numpy", specifier = ">=1.23" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = "~=0.16.1" },
 ]
 
 [[package]]
@@ -250,4 +241,32 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/8a/fb22af2fd78a736e241fabf67e30ce1799a64244026377a49e133af90762/ruff-0.16.1-py3-none-win32.whl", hash = "sha256:d31765e131295b8445caf301e3e8a85b34d1b9b211b4109b7ba457888b051806", size = 10838258, upload-time = "2026-07-30T19:36:53.298Z" },
     { url = "https://files.pythonhosted.org/packages/d4/35/e57fd9fb5d423961df087a00b12d42c0a830288dc2f3b45ecca299158b4f/ruff-0.16.1-py3-none-win_amd64.whl", hash = "sha256:09b05e8b90c2cb06ad63464350e7a45e8e44a2dfe52072ebfba6666ca8d3f596", size = 11961111, upload-time = "2026-07-30T19:36:56.107Z" },
     { url = "https://files.pythonhosted.org/packages/cb/46/240ea004bf6dc4feb40e9832f2205a476a47dd5b8a3f8211a5fc5f95e20e/ruff-0.16.1-py3-none-win_arm64.whl", hash = "sha256:dbaadaac38c70239f056d306b7476f246b0bf000fa6b3876402acbf5b227eaf8", size = 11309414, upload-time = "2026-07-30T19:36:58.79Z" },
+]
+
+[[package]]
+name = "sf-limiter"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+
+[package.dev-dependencies]
+benchmark = [
+    { name = "numpy-audio-limiter" },
+]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy", specifier = ">=1.23" }]
+
+[package.metadata.requires-dev]
+benchmark = [{ name = "numpy-audio-limiter", specifier = "==0.2.0" }]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = "~=0.16.1" },
 ]

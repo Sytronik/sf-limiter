@@ -85,6 +85,7 @@ struct BoxFilter {
     buffer: Vec<f64>,
     index: usize,
     sum: f64,
+    inverse_length: f64,
 }
 
 impl BoxFilter {
@@ -94,6 +95,7 @@ impl BoxFilter {
             buffer: vec![0.0; length],
             index: 0,
             sum: 0.0,
+            inverse_length: 1.0 / length as f64,
         }
     }
 
@@ -106,8 +108,11 @@ impl BoxFilter {
     fn step(&mut self, value: f64) -> f64 {
         self.sum += value - self.buffer[self.index];
         self.buffer[self.index] = value;
-        self.index = (self.index + 1) % self.buffer.len();
-        self.sum / self.buffer.len() as f64
+        self.index += 1;
+        if self.index == self.buffer.len() {
+            self.index = 0;
+        }
+        self.sum * self.inverse_length
     }
 }
 

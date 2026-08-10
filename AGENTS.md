@@ -15,6 +15,10 @@ The dependency-free Rust limiter core lives in `src/lib.rs`, while gain-envelope
 
 Run `uv sync` before Python tests whenever Rust bindings or package metadata change.
 
+## Pyrefly
+
+Pyrefly is installed as an assistive tool for developers while writing Python code. Its type inference is not complete, so running Pyrefly or requiring it to pass is not part of the project's validation workflow.
+
 ## Coding Style & Naming Conventions
 
 Use rustfmt defaults (four-space indentation) and keep the crate free of unsafe Rust, as enforced by `Cargo.toml`. Follow Rust conventions: `snake_case` functions/modules, `CamelCase` types, and descriptive error variants. Python uses four spaces, `snake_case`, type annotations, and Ruff formatting. Keep the audio core independent of Python-specific types; binding conversion and validation belong in `src/python.rs`.

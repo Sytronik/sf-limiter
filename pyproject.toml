@@ -22,6 +22,7 @@ benchmark = [
   "numpy-audio-limiter==0.2.0",
 ]
 dev = [
+  "pyrefly==1.2.0",
   "pytest>=8",
   "ruff~=0.16.1",
 ]

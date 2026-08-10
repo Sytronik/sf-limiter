@@ -198,6 +198,7 @@ def run(args: argparse.Namespace) -> None:
                 )
 
             def numpy_one_shot(audio: np.ndarray = numpy_audio) -> np.ndarray:
+                # pyrefly: ignore [missing-attribute]
                 return numpy_audio_limiter.limit(
                     signal=audio,
                     attack_coeff=attack_coefficient,

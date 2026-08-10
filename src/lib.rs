@@ -181,45 +181,38 @@ impl SFLimiter {
         samples: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        validate_samples(samples, channels)?;
+        let mut gains = collect_frame_peaks(samples, channels)?;
         self.reset();
 
-        if samples.is_empty() {
-            return Ok(Vec::new());
+        if gains.is_empty() {
+            return Ok(gains);
         }
 
-        let frame_count = samples.len() / channels;
-        let mut envelope = Vec::with_capacity(frame_count + self.attack_samples);
-        for frame in samples.chunks_exact(channels) {
-            envelope.push(self.calculate_gain(frame));
-        }
-        for _ in 0..self.attack_samples {
-            envelope.push(self.calculate_gain_from_peak(0.0));
-        }
+        let frame_count = gains.len();
+        for envelope_index in 0..frame_count + self.attack_samples {
+            let lookahead_peak = gains.get(envelope_index).map_or(0.0, |peak| *peak as f64);
+            let envelope_gain = self.calculate_gain_from_peak(lookahead_peak);
 
-        let mut gains: Vec<f32> = envelope
-            .into_iter()
-            .skip(self.attack_samples)
-            .map(|gain| gain as f32)
-            .collect();
+            if envelope_index < self.attack_samples {
+                continue;
+            }
 
-        for (frame_index, frame) in samples.chunks_exact_mut(channels).enumerate() {
-            let peak = frame
-                .iter()
-                .map(|sample| f64::from(sample.abs()))
-                .fold(0.0, f64::max);
-            let mut gain = f64::from(gains[frame_index]);
+            let frame_index = envelope_index - self.attack_samples;
+            let current_peak = gains[frame_index] as f64;
+            let mut gain = envelope_gain;
 
             // The envelope construction should already satisfy this condition.
             // Lowering the whole frame is a numerical safety guard which keeps
             // rounding drift from ever crossing the configured ceiling.
-            if peak * gain > self.threshold {
-                gain = self.threshold / (peak + f64::EPSILON);
-                gains[frame_index] = gain as f32;
+            if current_peak * gain > self.threshold {
+                gain = self.threshold / (current_peak + f64::EPSILON);
             }
+            gains[frame_index] = gain as f32;
 
+            let frame_start = frame_index * channels;
+            let frame = &mut samples[frame_start..frame_start + channels];
             for sample in frame {
-                let limited = f64::from(*sample) * gain;
+                let limited = *sample as f64 * gain;
                 *sample = limited.clamp(-self.threshold, self.threshold) as f32;
             }
         }
@@ -255,14 +248,6 @@ impl SFLimiter {
         self.release.release_samples()
     }
 
-    fn calculate_gain(&mut self, frame: &[f32]) -> f64 {
-        let peak = frame
-            .iter()
-            .map(|sample| f64::from(sample.abs()))
-            .fold(0.0, f64::max);
-        self.calculate_gain_from_peak(peak)
-    }
-
     fn calculate_gain_from_peak(&mut self, peak: f64) -> f64 {
         let raw_gain = if peak > self.threshold {
             self.threshold / (peak + f64::EPSILON)
@@ -290,7 +275,7 @@ fn milliseconds_to_samples(sample_rate: u32, value_ms: f64) -> usize {
     (value_ms * sample_rate as f64 / 1000.0).round() as usize
 }
 
-fn validate_samples(samples: &[f32], channels: usize) -> Result<(), LimiterError> {
+fn collect_frame_peaks(samples: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
     if channels == 0 {
         return Err(LimiterError::InvalidChannelCount);
     }
@@ -300,10 +285,21 @@ fn validate_samples(samples: &[f32], channels: usize) -> Result<(), LimiterError
             channels,
         });
     }
-    if let Some(index) = samples.iter().position(|sample| !sample.is_finite()) {
-        return Err(LimiterError::NonFiniteSample { index });
+
+    let mut peaks = Vec::with_capacity(samples.len() / channels);
+    for (frame_index, frame) in samples.chunks_exact(channels).enumerate() {
+        let mut peak = 0.0_f32;
+        for (channel_index, sample) in frame.iter().enumerate() {
+            if !sample.is_finite() {
+                return Err(LimiterError::NonFiniteSample {
+                    index: frame_index * channels + channel_index,
+                });
+            }
+            peak = peak.max(sample.abs());
+        }
+        peaks.push(peak);
     }
-    Ok(())
+    Ok(peaks)
 }
 
 #[cfg(test)]

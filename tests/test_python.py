@@ -65,6 +65,108 @@ def test_channel_major_shape_is_preserved() -> None:
     assert_never_clips(output)
 
 
+def test_channel_major_processing_matches_frame_major_processing() -> None:
+    frame_major = np.array(
+        [[0.0, 0.0], [4.0, -5.0], [-3.0, 2.0], [0.2, -0.2]],
+        dtype=np.float32,
+    )
+    channel_major = frame_major.T
+
+    frame_output, frame_gains = sf_limiter.limit(
+        frame_major,
+        sample_rate=1_000,
+        threshold=0.8,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+    )
+    channel_output, channel_gains = sf_limiter.limit(
+        channel_major,
+        sample_rate=1_000,
+        threshold=0.8,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+        channel_axis=0,
+    )
+
+    assert np.array_equal(channel_gains, frame_gains)
+    assert np.array_equal(channel_output.T, frame_output)
+
+
+def assert_non_contiguous_matches_contiguous(
+    audio: np.ndarray, *, channel_axis: int = -1
+) -> None:
+    assert not audio.flags.c_contiguous
+    original = audio.copy()
+    contiguous = np.ascontiguousarray(audio)
+
+    output, gains = sf_limiter.limit(
+        audio,
+        sample_rate=1_000,
+        threshold=0.8,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+        channel_axis=channel_axis,
+    )
+    expected_output, expected_gains = sf_limiter.limit(
+        contiguous,
+        sample_rate=1_000,
+        threshold=0.8,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+        channel_axis=channel_axis,
+    )
+
+    assert np.array_equal(audio, original)
+    assert np.array_equal(output, expected_output)
+    assert np.array_equal(gains, expected_gains)
+
+
+@pytest.mark.parametrize(
+    "audio",
+    [
+        np.linspace(-4.0, 4.0, 48, dtype=np.float32)[1::3],
+        np.linspace(-4.0, 4.0, 48, dtype=np.float32)[::-2],
+    ],
+    ids=["positive-stride", "negative-stride"],
+)
+def test_non_contiguous_mono_matches_contiguous_input(audio: np.ndarray) -> None:
+    assert_non_contiguous_matches_contiguous(audio)
+
+
+@pytest.mark.parametrize(
+    "audio",
+    [
+        np.asfortranarray(np.linspace(-4.0, 4.0, 72, dtype=np.float32).reshape(24, 3)),
+        np.linspace(-4.0, 4.0, 192, dtype=np.float32).reshape(32, 6)[::2, 1::2],
+        np.linspace(-4.0, 4.0, 72, dtype=np.float32).reshape(24, 3)[::-1, ::-1],
+    ],
+    ids=["fortran-order", "strided-axes", "reversed-axes"],
+)
+def test_non_contiguous_frame_major_matches_contiguous_input(
+    audio: np.ndarray,
+) -> None:
+    assert_non_contiguous_matches_contiguous(audio)
+
+
+@pytest.mark.parametrize(
+    "audio",
+    [
+        np.linspace(-4.0, 4.0, 72, dtype=np.float32).reshape(24, 3).T,
+        np.linspace(-4.0, 4.0, 192, dtype=np.float32).reshape(6, 32)[1::2, ::2],
+        np.linspace(-4.0, 4.0, 72, dtype=np.float32).reshape(3, 24)[::-1, ::-1],
+    ],
+    ids=["transposed", "strided-axes", "reversed-axes"],
+)
+def test_non_contiguous_channel_major_matches_contiguous_input(
+    audio: np.ndarray,
+) -> None:
+    assert_non_contiguous_matches_contiguous(audio, channel_axis=0)
+
+
 def test_invalid_dimensions_are_rejected() -> None:
     with pytest.raises(ValueError, match="1D or 2D"):
         sf_limiter.limit(np.zeros((2, 3, 4)), sample_rate=48_000)

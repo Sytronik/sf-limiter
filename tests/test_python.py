@@ -68,3 +68,10 @@ def test_channel_major_shape_is_preserved() -> None:
 def test_invalid_dimensions_are_rejected() -> None:
     with pytest.raises(ValueError, match="1D or 2D"):
         sf_limiter.limit(np.zeros((2, 3, 4)), sample_rate=48_000)
+
+
+def test_frame_major_non_finite_index_uses_input_order() -> None:
+    audio = np.array([[0.0, np.nan], [1.0, 2.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="flat index 1"):
+        sf_limiter.limit(audio, sample_rate=48_000)

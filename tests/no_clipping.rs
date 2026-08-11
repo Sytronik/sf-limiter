@@ -82,3 +82,38 @@ fn samples_use_the_reported_f32_gain() {
     assert_ne!(output.gains[0], 1.0);
     assert_never_clips(&output.samples, 0.3);
 }
+
+#[test]
+fn planar_processing_matches_interleaved_processing() {
+    let interleaved = [0.0, 0.0, 4.0, -5.0, -3.0, 2.0, 0.2, -0.2];
+    let mut planar = [0.0, 4.0, -3.0, 0.2, 0.0, -5.0, 2.0, -0.2];
+    let mut interleaved_limiter = SFLimiter::new(1_000, 0.8, 1.0, 0.0, 0.0).unwrap();
+    let mut planar_limiter = interleaved_limiter.clone();
+
+    let interleaved_output = interleaved_limiter
+        .process_interleaved(&interleaved, 2)
+        .unwrap();
+    let planar_gains = planar_limiter
+        .process_planar_inplace(&mut planar, 2)
+        .unwrap();
+
+    let planar_as_interleaved: Vec<_> = (0..4)
+        .flat_map(|frame| [planar[frame], planar[4 + frame]])
+        .collect();
+    assert_eq!(planar_gains, interleaved_output.gains);
+    assert_eq!(planar_as_interleaved, interleaved_output.samples);
+    assert_never_clips(&planar, 0.8);
+}
+
+#[test]
+fn planar_non_finite_index_uses_flat_channel_major_order() {
+    let mut planar = [0.0, 1.0, 2.0, f32::INFINITY];
+    let mut limiter = SFLimiter::with_default(48_000).unwrap();
+
+    let error = limiter.process_planar_inplace(&mut planar, 2).unwrap_err();
+
+    assert_eq!(
+        error,
+        sf_limiter::LimiterError::NonFiniteSample { index: 3 }
+    );
+}

@@ -1,7 +1,8 @@
 //! A dependency-free look-ahead brick-wall limiter core.
 //!
-//! `SFLimiter` accepts frame-interleaved `f32` audio. It computes one gain
-//! value per frame across every channel, so the stereo image is preserved.
+//! `SFLimiter` accepts frame-interleaved or channel-planar `f32` audio. It
+//! computes one gain value per frame across every channel, so the stereo image
+//! is preserved.
 //!
 //! The design was informed by Geraint Luff's article
 //! [“Designing a straightforward limiter”](https://signalsmith-audio.co.uk/writing/2022/limiter/).
@@ -86,7 +87,7 @@ impl Error for LimiterError {}
 /// The result of an allocating limiter call.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LimiterOutput {
-    /// Limited frame-interleaved audio.
+    /// Limited audio in the same layout as the input.
     pub samples: Vec<f32>,
     /// The gain applied to each frame.
     pub gains: Vec<f32>,
@@ -181,15 +182,53 @@ impl SFLimiter {
         samples: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        let mut gains = collect_frame_peaks(samples, channels)?;
+        let peaks = collect_interleaved_frame_peaks(samples, channels)?;
+        let gains = self.calculate_gains(peaks);
+        apply_interleaved_gains(samples, &gains, channels, self.threshold as f32);
+        Ok(gains)
+    }
+
+    /// Processes a copy of channel-planar audio.
+    ///
+    /// The flat input contains every frame of the first channel, followed by
+    /// every frame of the second channel, and so on.
+    pub fn process_planar(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+    ) -> Result<LimiterOutput, LimiterError> {
+        let mut output = samples.to_vec();
+        let gains = self.process_planar_inplace(&mut output, channels)?;
+        Ok(LimiterOutput {
+            samples: output,
+            gains,
+        })
+    }
+
+    /// Processes channel-planar audio in place and returns one gain per frame.
+    ///
+    /// The flat input contains every frame of the first channel, followed by
+    /// every frame of the second channel, and so on. The limiter resets at the
+    /// start of every call.
+    pub fn process_planar_inplace(
+        &mut self,
+        samples: &mut [f32],
+        channels: usize,
+    ) -> Result<Vec<f32>, LimiterError> {
+        let peaks = collect_planar_frame_peaks(samples, channels)?;
+        let gains = self.calculate_gains(peaks);
+        apply_planar_gains(samples, &gains, self.threshold as f32);
+        Ok(gains)
+    }
+
+    fn calculate_gains(&mut self, mut gains: Vec<f32>) -> Vec<f32> {
         self.reset();
 
         if gains.is_empty() {
-            return Ok(gains);
+            return gains;
         }
 
         let frame_count = gains.len();
-        let sample_threshold = self.threshold as f32;
         for envelope_index in 0..frame_count + self.attack_samples {
             let lookahead_peak = gains.get(envelope_index).map_or(0.0, |peak| *peak as f64);
             let envelope_gain = self.calculate_gain_from_peak(lookahead_peak);
@@ -210,15 +249,9 @@ impl SFLimiter {
             }
             let applied_gain = gain as f32;
             gains[frame_index] = applied_gain;
-
-            let frame_start = frame_index * channels;
-            let frame = &mut samples[frame_start..frame_start + channels];
-            for sample in frame {
-                *sample = (*sample * applied_gain).clamp(-sample_threshold, sample_threshold);
-            }
         }
 
-        Ok(gains)
+        gains
     }
 
     /// Restores the internal gain envelope to its neutral state.
@@ -276,18 +309,26 @@ fn milliseconds_to_samples(sample_rate: u32, value_ms: f64) -> usize {
     (value_ms * sample_rate as f64 / 1000.0).round() as usize
 }
 
-fn collect_frame_peaks(samples: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
+fn validate_layout(sample_count: usize, channels: usize) -> Result<usize, LimiterError> {
     if channels == 0 {
         return Err(LimiterError::InvalidChannelCount);
     }
-    if !samples.len().is_multiple_of(channels) {
+    if !sample_count.is_multiple_of(channels) {
         return Err(LimiterError::InputNotFrameAligned {
-            sample_count: samples.len(),
+            sample_count,
             channels,
         });
     }
+    Ok(sample_count / channels)
+}
 
-    let mut peaks = Vec::with_capacity(samples.len() / channels);
+fn collect_interleaved_frame_peaks(
+    samples: &[f32],
+    channels: usize,
+) -> Result<Vec<f32>, LimiterError> {
+    let frame_count = validate_layout(samples.len(), channels)?;
+
+    let mut peaks = Vec::with_capacity(frame_count);
     for (frame_index, frame) in samples.chunks_exact(channels).enumerate() {
         let mut peak = 0.0_f32;
         for (channel_index, sample) in frame.iter().enumerate() {
@@ -301,6 +342,45 @@ fn collect_frame_peaks(samples: &[f32], channels: usize) -> Result<Vec<f32>, Lim
         peaks.push(peak);
     }
     Ok(peaks)
+}
+
+fn collect_planar_frame_peaks(samples: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
+    let frame_count = validate_layout(samples.len(), channels)?;
+    if let Some(index) = samples.iter().position(|sample| !sample.is_finite()) {
+        return Err(LimiterError::NonFiniteSample { index });
+    }
+
+    let mut peaks = vec![0.0_f32; frame_count];
+    if frame_count == 0 {
+        return Ok(peaks);
+    }
+
+    for channel in samples.chunks_exact(frame_count) {
+        for (peak, sample) in peaks.iter_mut().zip(channel) {
+            *peak = peak.max(sample.abs());
+        }
+    }
+    Ok(peaks)
+}
+
+fn apply_interleaved_gains(samples: &mut [f32], gains: &[f32], channels: usize, threshold: f32) {
+    for (frame, gain) in samples.chunks_exact_mut(channels).zip(gains) {
+        for sample in frame {
+            *sample = (*sample * *gain).clamp(-threshold, threshold);
+        }
+    }
+}
+
+fn apply_planar_gains(samples: &mut [f32], gains: &[f32], threshold: f32) {
+    if gains.is_empty() {
+        return;
+    }
+
+    for channel in samples.chunks_exact_mut(gains.len()) {
+        for (sample, gain) in channel.iter_mut().zip(gains) {
+            *sample = (*sample * *gain).clamp(-threshold, threshold);
+        }
+    }
 }
 
 #[cfg(test)]

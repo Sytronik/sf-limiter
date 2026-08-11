@@ -1,4 +1,4 @@
-"""Compare sf-limiter with numpy-audio-limiter through their Python APIs."""
+"""Compare planar sf-limiter and numpy-audio-limiter Python API performance."""
 
 from __future__ import annotations
 
@@ -42,12 +42,11 @@ def time_constant_coefficient(milliseconds: float, sample_rate: int) -> float:
     return 0.0 if samples == 0.0 else math.exp(-1.0 / samples)
 
 
-def make_audio(frames: int, channels: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def make_audio(frames: int, channels: int, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
-    frame_major = rng.normal(0.0, 0.35, size=(frames, channels)).astype(np.float32)
-    frame_major[::997] *= 4.0
-    channel_major = np.ascontiguousarray(frame_major.T)
-    return frame_major, channel_major
+    planar = rng.normal(0.0, 0.35, size=(channels, frames)).astype(np.float32)
+    planar[:, ::997] *= 4.0
+    return planar
 
 
 def measure(
@@ -88,8 +87,7 @@ def measure(
 
 
 def validate_outputs(
-    sf_audio: np.ndarray,
-    numpy_audio: np.ndarray,
+    audio: np.ndarray,
     sf_reused: Callable[[], tuple[np.ndarray, np.ndarray]],
     sf_one_shot: Callable[[], tuple[np.ndarray, np.ndarray]],
     numpy_one_shot: Callable[[], np.ndarray],
@@ -102,13 +100,13 @@ def validate_outputs(
         if not isinstance(result, tuple) or len(result) != 2:
             raise RuntimeError(f"{name} returned an unexpected value")
         output, gains = result
-        if output.shape != sf_audio.shape or gains.shape != (sf_audio.shape[0],):
+        if output.shape != audio.shape or gains.shape != (audio.shape[1],):
             raise RuntimeError(f"{name} returned an unexpected shape")
         if output.dtype != np.float32 or not np.isfinite(output).all():
             raise RuntimeError(f"{name} returned invalid samples")
 
     reference_output = numpy_one_shot()
-    if reference_output.shape != numpy_audio.shape:
+    if reference_output.shape != audio.shape:
         raise RuntimeError("numpy_audio_limiter.limit returned an unexpected shape")
     if reference_output.dtype != np.float32 or not np.isfinite(reference_output).all():
         raise RuntimeError("numpy_audio_limiter.limit returned invalid samples")
@@ -121,7 +119,8 @@ def print_header() -> None:
     print(f"numpy-audio-limiter {package_version('numpy-audio-limiter')}")
     print()
     print("Times include Python binding overhead and output allocation.")
-    print("Input layout conversion and deterministic input generation are excluded.")
+    print("Inputs are contiguous channel-planar arrays shaped (channels, frames).")
+    print("Deterministic input generation is excluded.")
     print("sf-limiter returns audio and gains; numpy-audio-limiter returns audio only.")
     print(
         "Limiter parameters are analogous, but the algorithms are not numerically equivalent."
@@ -166,7 +165,7 @@ def run(args: argparse.Namespace) -> None:
     for duration_index, duration in enumerate(args.durations):
         frames = max(1, round(duration * args.sample_rate))
         for channels in args.channels:
-            sf_audio, numpy_audio = make_audio(
+            audio = make_audio(
                 frames,
                 channels,
                 seed=args.seed + duration_index * 1_000 + channels,
@@ -180,27 +179,28 @@ def run(args: argparse.Namespace) -> None:
             )
 
             def sf_reused(
-                audio: np.ndarray = sf_audio,
+                planar_audio: np.ndarray = audio,
                 configured_limiter: sf_limiter.SFLimiter = limiter,
             ) -> tuple[np.ndarray, np.ndarray]:
-                return configured_limiter.process(audio)
+                return configured_limiter.process(planar_audio, channel_axis=0)
 
             def sf_one_shot(
-                audio: np.ndarray = sf_audio,
+                planar_audio: np.ndarray = audio,
             ) -> tuple[np.ndarray, np.ndarray]:
                 return sf_limiter.limit(
-                    audio,
+                    planar_audio,
                     sample_rate=args.sample_rate,
                     threshold=args.threshold,
                     attack_ms=args.attack_ms,
                     hold_ms=0.0,
                     release_ms=args.release_ms,
+                    channel_axis=0,
                 )
 
-            def numpy_one_shot(audio: np.ndarray = numpy_audio) -> np.ndarray:
+            def numpy_one_shot(planar_audio: np.ndarray = audio) -> np.ndarray:
                 # pyrefly: ignore [missing-attribute]
                 return numpy_audio_limiter.limit(
-                    signal=audio,
+                    signal=planar_audio,
                     attack_coeff=attack_coefficient,
                     release_coeff=release_coefficient,
                     delay=attack_samples,
@@ -208,8 +208,7 @@ def run(args: argparse.Namespace) -> None:
                 )
 
             validate_outputs(
-                sf_audio,
-                numpy_audio,
+                audio,
                 sf_reused,
                 sf_one_shot,
                 numpy_one_shot,

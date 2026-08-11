@@ -69,7 +69,15 @@ configuration values raise `ValueError`.
 
 ## Rust
 
-The core Rust API processes frame-interleaved `f32` samples:
+The core Rust API accepts flat `f32` samples in either of these layouts:
+
+- **Frame-interleaved:** each frame contains one sample per channel. Use
+  `process_interleaved` or `process_interleaved_inplace`.
+- **Channel-planar:** all frames of the first channel are followed by all
+  frames of the next channel. Use `process_planar` or
+  `process_planar_inplace`.
+
+For frame-interleaved audio:
 
 ```rust
 use sf_limiter::SFLimiter;
@@ -84,6 +92,23 @@ assert!(output.samples.iter().all(|sample| sample.abs() <= 1.0));
 
 Use `process_interleaved_inplace` to reuse the input allocation. Both methods
 return one linked gain value per frame and reset the envelope on every call.
+
+For channel-planar audio:
+
+```rust
+let mut planar = [0.0, 0.5, 3.0, -4.0, 0.25, -0.25];
+let mut limiter = SFLimiter::with_default(48_000)?;
+let gains = limiter.process_planar_inplace(&mut planar, 2)?;
+
+assert_eq!(gains.len(), 3);
+# Ok::<(), sf_limiter::LimiterError>(())
+```
+
+The Python binding always uses the planar core path. Two-dimensional
+`channel_axis=0` input is already planar and is processed directly;
+`(frames, channels)` input is transposed to planar layout for processing and
+then restored to its original layout for the returned array. The interleaved
+core path remains available to Rust callers.
 
 ## Ceiling guarantee
 
@@ -129,6 +154,7 @@ uv sync --group benchmark
 uv run --group benchmark python benchmarks/compare_numpy_audio_limiter.py
 ```
 
-The benchmark measures reusable and one-shot `sf_limiter` calls separately.
-Use `--help` to select durations, channel counts, timing repetitions, and
-limiter settings.
+The benchmark uses contiguous channel-planar arrays shaped
+`(channels, frames)` for both implementations and measures reusable and
+one-shot `sf_limiter` calls separately. Use `--help` to select durations,
+channel counts, timing repetitions, and limiter settings.

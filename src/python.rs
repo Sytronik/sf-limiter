@@ -186,14 +186,17 @@ fn process_numpy<'py>(
     channel_axis: isize,
 ) -> PyProcessOutput<'py> {
     let shape = audio.shape().to_vec();
-    let (mut interleaved, channels, normalized_axis) = match audio.ndim() {
+    let (mut planar, channels, frame_major_shape) = match audio.ndim() {
         1 => {
             normalize_channel_axis(channel_axis, 1)?;
-            (audio.iter().copied().collect(), 1, 0)
+            let planar = audio.as_slice().map_or_else(
+                || (0..shape[0]).map(|frame| audio[[frame]]).collect(),
+                <[f32]>::to_vec,
+            );
+            (planar, 1, None)
         }
         2 => {
             let axis = normalize_channel_axis(channel_axis, 2)?;
-            let frames = shape[1 - axis];
             let channels = shape[axis];
             if channels == 0 {
                 return Err(PyValueError::new_err(
@@ -201,18 +204,31 @@ fn process_numpy<'py>(
                 ));
             }
 
-            let interleaved = if axis == 1 {
-                audio.iter().copied().collect()
+            let frames = shape[1 - axis];
+            let planar = if axis == 0 {
+                audio.as_slice().map_or_else(
+                    || {
+                        let mut planar = Vec::with_capacity(audio.len());
+                        for channel in 0..channels {
+                            for frame in 0..frames {
+                                planar.push(audio[[channel, frame]]);
+                            }
+                        }
+                        planar
+                    },
+                    <[f32]>::to_vec,
+                )
             } else {
-                let mut interleaved = Vec::with_capacity(audio.len());
-                for frame in 0..frames {
-                    for channel in 0..channels {
-                        interleaved.push(audio[[channel, frame]]);
+                let mut planar = Vec::with_capacity(audio.len());
+                for channel in 0..channels {
+                    for frame in 0..frames {
+                        planar.push(audio[[frame, channel]]);
                     }
                 }
-                interleaved
+                planar
             };
-            (interleaved, channels, axis)
+            let frame_major_shape = (axis == 1).then_some((frames, channels));
+            (planar, channels, frame_major_shape)
         }
         dimensions => {
             return Err(PyValueError::new_err(format!(
@@ -222,25 +238,37 @@ fn process_numpy<'py>(
     };
 
     let gains = limiter
-        .process_interleaved_inplace(&mut interleaved, channels)
-        .map_err(value_error)?;
-
-    let shaped_samples = if shape.len() == 2 && normalized_axis == 0 {
-        let frames = shape[1];
-        let mut channel_major = Vec::with_capacity(interleaved.len());
-        for channel in 0..channels {
-            for frame in 0..frames {
-                channel_major.push(interleaved[frame * channels + channel]);
+        .process_planar_inplace(&mut planar, channels)
+        .map_err(|error| match (error, frame_major_shape) {
+            (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
+                let channel = index / frames;
+                let frame = index % frames;
+                value_error(LimiterError::NonFiniteSample {
+                    index: frame * channels + channel,
+                })
             }
-        }
-        channel_major
+            (error, _) => value_error(error),
+        })?;
+
+    let shaped_samples = if let Some((frames, channels)) = frame_major_shape {
+        planar_to_interleaved(&planar, frames, channels)
     } else {
-        interleaved
+        planar
     };
 
     let output = ArrayD::from_shape_vec(IxDyn(&shape), shaped_samples)
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok((output.into_pyarray(py), gains.into_pyarray(py)))
+}
+
+fn planar_to_interleaved(samples: &[f32], frames: usize, channels: usize) -> Vec<f32> {
+    let mut interleaved = Vec::with_capacity(samples.len());
+    for frame in 0..frames {
+        for channel in 0..channels {
+            interleaved.push(samples[channel * frames + frame]);
+        }
+    }
+    interleaved
 }
 
 fn normalize_channel_axis(channel_axis: isize, dimensions: usize) -> PyResult<usize> {

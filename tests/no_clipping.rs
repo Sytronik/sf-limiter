@@ -70,3 +70,15 @@ fn processing_in_place_has_the_same_hard_ceiling() {
     assert_eq!(gains.len(), 3);
     assert_never_clips(&audio, 1.0);
 }
+
+#[test]
+fn samples_use_the_reported_f32_gain() {
+    let input = [1.1_f32, 0.1_f32];
+    let mut limiter = SFLimiter::new(1_000, 0.3, 1.0, 0.0, 0.0).unwrap();
+
+    let output = limiter.process_interleaved(&input, 2).unwrap();
+
+    assert_eq!(output.samples[1], input[1] * output.gains[0]);
+    assert_ne!(output.gains[0], 1.0);
+    assert_never_clips(&output.samples, 0.3);
+}

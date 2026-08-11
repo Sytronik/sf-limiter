@@ -189,6 +189,7 @@ impl SFLimiter {
         }
 
         let frame_count = gains.len();
+        let sample_threshold = self.threshold as f32;
         for envelope_index in 0..frame_count + self.attack_samples {
             let lookahead_peak = gains.get(envelope_index).map_or(0.0, |peak| *peak as f64);
             let envelope_gain = self.calculate_gain_from_peak(lookahead_peak);
@@ -207,13 +208,13 @@ impl SFLimiter {
             if current_peak * gain > self.threshold {
                 gain = self.threshold / (current_peak + f64::EPSILON);
             }
-            gains[frame_index] = gain as f32;
+            let applied_gain = gain as f32;
+            gains[frame_index] = applied_gain;
 
             let frame_start = frame_index * channels;
             let frame = &mut samples[frame_start..frame_start + channels];
             for sample in frame {
-                let limited = *sample as f64 * gain;
-                *sample = limited.clamp(-self.threshold, self.threshold) as f32;
+                *sample = (*sample * applied_gain).clamp(-sample_threshold, sample_threshold);
             }
         }
 

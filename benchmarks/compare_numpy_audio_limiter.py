@@ -1,7 +1,5 @@
 """Compare planar sf-limiter and numpy-audio-limiter Python API performance."""
 
-from __future__ import annotations
-
 import argparse
 import gc
 import math

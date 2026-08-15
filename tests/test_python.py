@@ -171,6 +171,58 @@ def test_invalid_dimensions_are_rejected() -> None:
         sf_limiter.limit(np.zeros((2, 3, 4)), sample_rate=48_000)
 
 
+@pytest.mark.parametrize(
+    ("audio", "axis", "dimensions"),
+    [
+        (np.zeros(4, dtype=np.float32), 1, 1),
+        (np.zeros(4, dtype=np.float32), -2, 1),
+        (np.zeros((2, 3), dtype=np.float32), 2, 2),
+        (np.zeros((2, 3), dtype=np.float32), -3, 2),
+    ],
+)
+def test_invalid_frame_axes_are_rejected(
+    audio: np.ndarray, axis: int, dimensions: int
+) -> None:
+    with pytest.raises(
+        ValueError, match=rf"axis={axis} is invalid for a {dimensions}D array"
+    ):
+        sf_limiter.limit(audio, sample_rate=48_000, axis=axis)
+
+
+@pytest.mark.parametrize(
+    ("shape", "axis"),
+    [
+        ((2, 0), -1),
+        ((0, 2), 0),
+    ],
+    ids=["channel-major", "frame-major"],
+)
+def test_empty_frame_dimension_is_supported(shape: tuple[int, int], axis: int) -> None:
+    audio = np.zeros(shape, dtype=np.float32)
+
+    output, gains = sf_limiter.limit(audio, sample_rate=48_000, axis=axis)
+
+    assert output.shape == audio.shape
+    assert output.dtype == np.float32
+    assert gains.shape == (0,)
+    assert gains.dtype == np.float32
+
+
+@pytest.mark.parametrize(
+    ("shape", "axis"),
+    [
+        ((0, 2), -1),
+        ((2, 0), 0),
+    ],
+    ids=["channel-major", "frame-major"],
+)
+def test_empty_channel_dimension_is_rejected(shape: tuple[int, int], axis: int) -> None:
+    audio = np.zeros(shape, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="channel dimension must not be empty"):
+        sf_limiter.limit(audio, sample_rate=48_000, axis=axis)
+
+
 def test_frame_major_non_finite_index_uses_input_order() -> None:
     audio = np.array([[0.0, np.nan], [1.0, 2.0]], dtype=np.float32)
 

@@ -1,4 +1,4 @@
-use sf_limiter::SFLimiter;
+use sf_limiter::{LimiterError, SFLimiter};
 
 fn assert_never_clips(samples: &[f32], ceiling: f32) {
     assert!(
@@ -72,6 +72,20 @@ fn processing_in_place_has_the_same_hard_ceiling() {
 }
 
 #[test]
+fn repeated_calls_start_from_a_neutral_envelope() {
+    let hot_input = vec![8.0; 16];
+    let quiet_input = vec![0.25; 8];
+    let mut reused_limiter = SFLimiter::new(1_000, 1.0, 3.0, 2.0, 1_000.0).unwrap();
+    let mut fresh_limiter = reused_limiter.clone();
+
+    reused_limiter.process_interleaved(&hot_input, 1).unwrap();
+    let reused_output = reused_limiter.process_interleaved(&quiet_input, 1).unwrap();
+    let fresh_output = fresh_limiter.process_interleaved(&quiet_input, 1).unwrap();
+
+    assert_eq!(reused_output, fresh_output);
+}
+
+#[test]
 fn samples_use_the_reported_f32_gain() {
     let input = [1.1_f32, 0.1_f32];
     let mut limiter = SFLimiter::new(1_000, 0.3, 1.0, 0.0, 0.0).unwrap();
@@ -116,4 +130,33 @@ fn planar_non_finite_index_uses_flat_channel_major_order() {
         error,
         sf_limiter::LimiterError::NonFiniteSample { index: 3 }
     );
+}
+
+#[test]
+fn planar_processing_rejects_invalid_layout_without_mutating_input() {
+    let mut zero_channel_input = [1.0, -1.0];
+    let original_zero_channel_input = zero_channel_input;
+    let mut limiter = SFLimiter::with_default(48_000).unwrap();
+
+    let error = limiter
+        .process_planar_inplace(&mut zero_channel_input, 0)
+        .unwrap_err();
+
+    assert_eq!(error, LimiterError::InvalidChannelCount);
+    assert_eq!(zero_channel_input, original_zero_channel_input);
+
+    let mut misaligned_input = [1.0, -1.0, 0.5];
+    let original_misaligned_input = misaligned_input;
+    let error = limiter
+        .process_planar_inplace(&mut misaligned_input, 2)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        LimiterError::InputNotFrameAligned {
+            sample_count: 3,
+            channels: 2,
+        }
+    );
+    assert_eq!(misaligned_input, original_misaligned_input);
 }

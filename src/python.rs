@@ -238,8 +238,11 @@ fn process_numpy<'py>(
         }
     };
 
-    let gains = limiter
-        .process_planar_inplace(&mut planar, channels)
+    // The NumPy view and output allocation need the GIL, but the limiter core
+    // only works with Rust-owned data. Detach while doing the CPU-intensive
+    // part so other Python threads can run during processing.
+    let gains = py
+        .detach(|| limiter.process_planar_inplace(&mut planar, channels))
         .map_err(|error| match (error, interleaved_shape) {
             (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
                 let channel = index / frames;

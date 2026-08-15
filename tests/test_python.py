@@ -37,7 +37,7 @@ def test_frame_major_multichannel_input_never_clips() -> None:
         hold_ms=15.0,
         release_ms=40.0,
     )
-    output, gains = limiter.process(audio)
+    output, gains = limiter.process(audio, axis=0)
 
     assert output.shape == audio.shape
     assert gains.shape == (audio.shape[0],)
@@ -45,20 +45,19 @@ def test_frame_major_multichannel_input_never_clips() -> None:
     assert_never_clips(output, 0.8)
 
 
-def test_channel_major_shape_is_preserved() -> None:
+def test_channel_major_shape_is_preserved_by_default() -> None:
     audio = np.array(
         [[0.0, 4.0, -3.0, 0.2], [0.0, -5.0, 2.0, -0.2]],
         dtype=np.float32,
     )
 
-    output, gains = sf_limiter.limit(
-        audio,
-        sample_rate=1_000,
+    limiter = sf_limiter.SFLimiter(
+        1_000,
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
-        channel_axis=0,
     )
+    output, gains = limiter.process(audio)
 
     assert output.shape == audio.shape
     assert gains.shape == (audio.shape[1],)
@@ -79,6 +78,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
+        axis=0,
     )
     channel_output, channel_gains = sf_limiter.limit(
         channel_major,
@@ -87,7 +87,6 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
-        channel_axis=0,
     )
 
     assert np.array_equal(channel_gains, frame_gains)
@@ -95,7 +94,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
 
 
 def assert_non_contiguous_matches_contiguous(
-    audio: np.ndarray, *, channel_axis: int = -1
+    audio: np.ndarray, *, axis: int = -1
 ) -> None:
     assert not audio.flags.c_contiguous
     original = audio.copy()
@@ -108,7 +107,7 @@ def assert_non_contiguous_matches_contiguous(
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
-        channel_axis=channel_axis,
+        axis=axis,
     )
     expected_output, expected_gains = sf_limiter.limit(
         contiguous,
@@ -117,7 +116,7 @@ def assert_non_contiguous_matches_contiguous(
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
-        channel_axis=channel_axis,
+        axis=axis,
     )
 
     assert np.array_equal(audio, original)
@@ -149,7 +148,7 @@ def test_non_contiguous_mono_matches_contiguous_input(audio: np.ndarray) -> None
 def test_non_contiguous_frame_major_matches_contiguous_input(
     audio: np.ndarray,
 ) -> None:
-    assert_non_contiguous_matches_contiguous(audio)
+    assert_non_contiguous_matches_contiguous(audio, axis=0)
 
 
 @pytest.mark.parametrize(
@@ -164,7 +163,7 @@ def test_non_contiguous_frame_major_matches_contiguous_input(
 def test_non_contiguous_channel_major_matches_contiguous_input(
     audio: np.ndarray,
 ) -> None:
-    assert_non_contiguous_matches_contiguous(audio, channel_axis=0)
+    assert_non_contiguous_matches_contiguous(audio)
 
 
 def test_invalid_dimensions_are_rejected() -> None:
@@ -176,4 +175,4 @@ def test_frame_major_non_finite_index_uses_input_order() -> None:
     audio = np.array([[0.0, np.nan], [1.0, 2.0]], dtype=np.float32)
 
     with pytest.raises(ValueError, match="flat index 1"):
-        sf_limiter.limit(audio, sample_rate=48_000)
+        sf_limiter.limit(audio, sample_rate=48_000, axis=0)

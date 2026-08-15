@@ -43,7 +43,7 @@ The one-shot `limit` function accepts these keyword parameters:
 - `attack_ms=5.0`
 - `hold_ms=15.0`
 - `release_ms=40.0`
-- `channel_axis=-1`
+- `axis=-1`
 
 For repeated use, configure a limiter object once:
 
@@ -59,8 +59,8 @@ limited, gains = limiter.process(audio)
 ```
 
 Input may be a one-dimensional mono array or a two-dimensional multichannel
-array. The last axis is interpreted as channels by default, so the usual shape
-is `(frames, channels)`. Pass `channel_axis=0` for `(channels, frames)`. The
+array. The last axis is interpreted as frames by default, so the usual shape is
+`(channels, frames)`. Pass `axis=0` for `(frames, channels)`. The
 input is converted to `float32` without being mutated; the returned audio is a
 new `float32` array, and `gains` contains one value per frame.
 
@@ -104,8 +104,8 @@ assert_eq!(gains.len(), 3);
 # Ok::<(), sf_limiter::LimiterError>(())
 ```
 
-The Python binding always uses the planar core path. Two-dimensional
-`channel_axis=0` input is already planar and is processed directly;
+The Python binding always uses the planar core path. Default two-dimensional
+`axis=-1` input is already planar and is processed directly;
 `(frames, channels)` input is transposed to planar layout for processing and
 then restored to its original layout for the returned array. The interleaved
 core path remains available to Rust callers.

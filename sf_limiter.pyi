@@ -33,23 +33,22 @@ class SFLimiter:
         hold_ms: float = 15.0,
         release_ms: float = 40.0,
     ) -> None: ...
-    def process(self, audio: ArrayLike, channel_axis: int = -1) -> _ProcessOutput:
+    def process(self, audio: ArrayLike, axis: int = -1) -> _ProcessOutput:
         """Process mono or multichannel audio.
 
         Args:
             audio: A one-dimensional mono array or a two-dimensional
                 multichannel array. Values are converted to ``numpy.float32``;
                 the input is not modified.
-            channel_axis: Channel axis for two-dimensional input. The default
-                of ``-1`` expects ``(frames, channels)``. Use ``0`` for
-                ``(channels, frames)``.
+            axis: Frame axis. The default of ``-1`` expects
+                ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
 
         Returns:
             A tuple ``(audio, gains)`` containing the limited audio and one
             linked gain value per frame as ``numpy.float32`` arrays.
 
         Raises:
-            ValueError: If the input shape, channel axis, or samples are invalid.
+            ValueError: If the input shape, frame axis, or samples are invalid.
         """
 
     def reset(self) -> None:
@@ -82,7 +81,7 @@ def limit(
     attack_ms: float = 5.0,
     hold_ms: float = 15.0,
     release_ms: float = 40.0,
-    channel_axis: int = -1,
+    axis: int = -1,
 ) -> _ProcessOutput:
     """Limit mono or multichannel audio in one call.
 
@@ -95,9 +94,8 @@ def limit(
         attack_ms: Look-ahead attack time in milliseconds.
         hold_ms: Hold time in milliseconds. May be zero.
         release_ms: Release time in milliseconds. May be zero.
-        channel_axis: Channel axis for two-dimensional input. The default of
-            ``-1`` expects ``(frames, channels)``. Use ``0`` for
-            ``(channels, frames)``.
+        axis: Frame axis. The default of ``-1`` expects
+            ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
 
     Returns:
         A tuple ``(audio, gains)`` containing the limited audio and one linked

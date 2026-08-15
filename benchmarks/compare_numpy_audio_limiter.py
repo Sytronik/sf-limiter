@@ -182,7 +182,7 @@ def run(args: argparse.Namespace) -> None:
                 planar_audio: np.ndarray = audio,
                 configured_limiter: sf_limiter.SFLimiter = limiter,
             ) -> tuple[np.ndarray, np.ndarray]:
-                return configured_limiter.process(planar_audio, channel_axis=0)
+                return configured_limiter.process(planar_audio)
 
             def sf_one_shot(
                 planar_audio: np.ndarray = audio,
@@ -194,7 +194,6 @@ def run(args: argparse.Namespace) -> None:
                     attack_ms=args.attack_ms,
                     hold_ms=0.0,
                     release_ms=args.release_ms,
-                    channel_axis=0,
                 )
 
             def numpy_one_shot(planar_audio: np.ndarray = audio) -> np.ndarray:

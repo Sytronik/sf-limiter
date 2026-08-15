@@ -58,9 +58,9 @@ impl PySFLimiter {
     ///     audio: A one-dimensional mono array or a two-dimensional
     ///         multichannel array. Values are converted to ``numpy.float32``;
     ///         the input is not modified.
-    ///     channel_axis: Channel axis for two-dimensional input. The default
-    ///         of ``-1`` expects ``(frames, channels)``. Use ``0`` for
-    ///         ``(channels, frames)``. For mono input, ``0`` and ``-1`` are
+    ///     axis: Frame axis. The default of ``-1`` expects
+    ///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
+    ///         For mono input, ``0`` and ``-1`` are
     ///         equivalent.
     ///
     /// Returns:
@@ -71,16 +71,16 @@ impl PySFLimiter {
     ///
     /// Raises:
     ///     ValueError: If the input is not one- or two-dimensional, the
-    ///         channel axis is invalid, the channel dimension is empty, or an
+    ///         frame axis is invalid, the channel dimension is empty, or an
     ///         input sample is not finite.
-    #[pyo3(signature = (audio, channel_axis = -1))]
+    #[pyo3(signature = (audio, axis = -1))]
     fn process<'py>(
         &mut self,
         py: Python<'py>,
         audio: PyArrayLikeDyn<'py, f32, AllowTypeChange>,
-        channel_axis: isize,
+        axis: isize,
     ) -> PyProcessOutput<'py> {
-        process_numpy(py, &mut self.inner, audio.as_array(), channel_axis)
+        process_numpy(py, &mut self.inner, audio.as_array(), axis)
     }
 
     /// Restore the internal gain envelope to its neutral state.
@@ -140,9 +140,9 @@ impl PySFLimiter {
 ///         least one sample at ``sample_rate``.
 ///     hold_ms: Hold time in milliseconds. May be zero.
 ///     release_ms: Release time in milliseconds. May be zero.
-///     channel_axis: Channel axis for two-dimensional input. The default of
-///         ``-1`` expects ``(frames, channels)``. Use ``0`` for
-///         ``(channels, frames)``. For mono input, ``0`` and ``-1`` are
+///     axis: Frame axis. The default of ``-1`` expects
+///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``. For
+///         mono input, ``0`` and ``-1`` are
 ///         equivalent.
 ///
 /// Returns:
@@ -161,7 +161,7 @@ impl PySFLimiter {
     attack_ms = 5.0,
     hold_ms = 15.0,
     release_ms = 40.0,
-    channel_axis = -1
+    axis = -1
 ))]
 #[allow(clippy::too_many_arguments)]
 fn limit<'py>(
@@ -172,23 +172,23 @@ fn limit<'py>(
     attack_ms: f64,
     hold_ms: f64,
     release_ms: f64,
-    channel_axis: isize,
+    axis: isize,
 ) -> PyProcessOutput<'py> {
     let mut limiter = SFLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
         .map_err(value_error)?;
-    process_numpy(py, &mut limiter, audio.as_array(), channel_axis)
+    process_numpy(py, &mut limiter, audio.as_array(), axis)
 }
 
 fn process_numpy<'py>(
     py: Python<'py>,
     limiter: &mut SFLimiter,
     audio: ArrayViewD<'_, f32>,
-    channel_axis: isize,
+    axis: isize,
 ) -> PyProcessOutput<'py> {
     let shape = audio.shape().to_vec();
-    let (mut planar, channels, frame_major_shape) = match audio.ndim() {
+    let (mut planar, channels, interleaved_shape) = match audio.ndim() {
         1 => {
-            normalize_channel_axis(channel_axis, 1)?;
+            normalize_axis(axis, 1)?;
             let planar = audio.as_slice().map_or_else(
                 || (0..shape[0]).map(|frame| audio[[frame]]).collect(),
                 <[f32]>::to_vec,
@@ -196,16 +196,17 @@ fn process_numpy<'py>(
             (planar, 1, None)
         }
         2 => {
-            let axis = normalize_channel_axis(channel_axis, 2)?;
-            let channels = shape[axis];
+            let frame_axis = normalize_axis(axis, 2)?;
+            let channel_axis = 1 - frame_axis;
+            let channels = shape[channel_axis];
             if channels == 0 {
                 return Err(PyValueError::new_err(
                     "the channel dimension must not be empty",
                 ));
             }
 
-            let frames = shape[1 - axis];
-            let planar = if axis == 0 {
+            let frames = shape[frame_axis];
+            let planar = if frame_axis == 1 {
                 audio.as_slice().map_or_else(
                     || {
                         let mut planar = Vec::with_capacity(audio.len());
@@ -227,8 +228,8 @@ fn process_numpy<'py>(
                 }
                 planar
             };
-            let frame_major_shape = (axis == 1).then_some((frames, channels));
-            (planar, channels, frame_major_shape)
+            let interleaved_shape = (frame_axis == 0).then_some((frames, channels));
+            (planar, channels, interleaved_shape)
         }
         dimensions => {
             return Err(PyValueError::new_err(format!(
@@ -239,7 +240,7 @@ fn process_numpy<'py>(
 
     let gains = limiter
         .process_planar_inplace(&mut planar, channels)
-        .map_err(|error| match (error, frame_major_shape) {
+        .map_err(|error| match (error, interleaved_shape) {
             (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
                 let channel = index / frames;
                 let frame = index % frames;
@@ -250,7 +251,7 @@ fn process_numpy<'py>(
             (error, _) => value_error(error),
         })?;
 
-    let shaped_samples = if let Some((frames, channels)) = frame_major_shape {
+    let shaped_samples = if let Some((frames, channels)) = interleaved_shape {
         planar_to_interleaved(&planar, frames, channels)
     } else {
         planar
@@ -271,15 +272,15 @@ fn planar_to_interleaved(samples: &[f32], frames: usize, channels: usize) -> Vec
     interleaved
 }
 
-fn normalize_channel_axis(channel_axis: isize, dimensions: usize) -> PyResult<usize> {
-    let normalized = if channel_axis < 0 {
-        channel_axis + dimensions as isize
+fn normalize_axis(axis: isize, dimensions: usize) -> PyResult<usize> {
+    let normalized = if axis < 0 {
+        axis + dimensions as isize
     } else {
-        channel_axis
+        axis
     };
     if normalized < 0 || normalized >= dimensions as isize {
         return Err(PyValueError::new_err(format!(
-            "channel_axis={channel_axis} is invalid for a {dimensions}D array"
+            "axis={axis} is invalid for a {dimensions}D array"
         )));
     }
     Ok(normalized as usize)

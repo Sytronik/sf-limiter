@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify release version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag and package versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          with Path("pyproject.toml").open("rb") as file:
+              python_version = tomllib.load(file)["project"]["version"]
+          with Path("Cargo.toml").open("rb") as file:
+              rust_version = tomllib.load(file)["package"]["version"]
+
+          expected_tag = f"v{python_version}"
+          release_tag = os.environ["RELEASE_TAG"]
+          if rust_version != python_version:
+              raise SystemExit(
+                  f"version mismatch: Cargo.toml={rust_version}, "
+                  f"pyproject.toml={python_version}"
+              )
+          if release_tag != expected_tag:
+              raise SystemExit(
+                  f"tag mismatch: expected {expected_tag}, got {release_tag}"
+              )
+          PY
+
+  linux:
+    name: Linux ${{ matrix.target }}
+    needs: verify-version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          args: --release --locked --compatibility pypi --out dist
+          manylinux: "2_17"
+          maturin-version: v1.11.5
+          sccache: true
+          target: ${{ matrix.target }}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v5
+        with:
+          if-no-files-found: error
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  macos:
+    name: macOS ${{ matrix.target }}
+    needs: verify-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          args: --release --locked --compatibility pypi --out dist
+          maturin-version: v1.11.5
+          sccache: true
+          target: ${{ matrix.target }}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v5
+        with:
+          if-no-files-found: error
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  windows:
+    name: Windows x86_64
+    needs: verify-version
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          args: --release --locked --compatibility pypi --out dist
+          maturin-version: v1.11.5
+          sccache: true
+          target: x86_64-pc-windows-msvc
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v5
+        with:
+          if-no-files-found: error
+          name: wheels-windows-x86_64
+          path: dist
+
+  sdist:
+    name: Source distribution
+    needs: verify-version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Build source distribution
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          args: --out dist
+          command: sdist
+          maturin-version: v1.11.5
+
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v5
+        with:
+          if-no-files-found: error
+          name: sdist
+          path: dist
+
+  publish:
+    name: Publish to PyPI
+    needs: [linux, macos, windows, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sf-limiter
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          merge-multiple: true
+          path: dist
+          pattern: "*"
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

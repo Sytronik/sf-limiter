@@ -175,7 +175,7 @@ impl SFLimiter {
     /// Processes frame-interleaved audio in place and returns one gain per frame.
     ///
     /// The limiter resets at the start of every call. This is an offline API:
-    /// it uses future frames within [`Self::latency_samples`] but returns an
+    /// it uses future frames within [`Self::lookahead_samples`] but returns an
     /// array with the same length as the input.
     pub fn process_interleaved_inplace(
         &mut self,
@@ -257,13 +257,6 @@ impl SFLimiter {
         frame_gains
     }
 
-    /// Restores the internal gain envelope to its neutral state.
-    pub fn reset(&mut self) {
-        self.moving_minimum.reset();
-        self.release.reset();
-        self.smoother.reset(1.0);
-    }
-
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -271,9 +264,13 @@ impl SFLimiter {
     pub fn threshold(&self) -> f64 {
         self.threshold
     }
-
     /// Look-ahead latency in samples.
-    pub fn latency_samples(&self) -> usize {
+    pub fn lookahead_samples(&self) -> usize {
+        self.attack_samples
+    }
+
+    /// Look-ahead latency in samples. (alias for [`Self::lookahead_samples`])
+    pub fn attack_samples(&self) -> usize {
         self.attack_samples
     }
 
@@ -283,6 +280,13 @@ impl SFLimiter {
 
     pub fn release_samples(&self) -> f64 {
         self.release.release_samples()
+    }
+
+    /// Restores the internal gain envelope to its neutral state.
+    fn reset(&mut self) {
+        self.moving_minimum.reset();
+        self.release.reset();
+        self.smoother.reset(1.0);
     }
 
     fn calculate_gain_from_peak(&mut self, peak: f64) -> f64 {
@@ -429,5 +433,11 @@ mod tests {
         let output = limiter.process_interleaved(&[], 2).unwrap();
         assert!(output.audio.is_empty());
         assert!(output.frame_gains.is_empty());
+    }
+
+    #[test]
+    fn attack_samples_equals_to_lookahead_samples() {
+        let limiter = SFLimiter::new(48_000, 1.0, 12.0, 15.0, 40.0).unwrap();
+        assert_eq!(limiter.attack_samples(), limiter.lookahead_samples());
     }
 }

@@ -83,11 +83,6 @@ impl PySFLimiter {
         process_numpy(py, &mut self.inner, audio.as_array(), axis)
     }
 
-    /// Restore the internal gain envelope to its neutral state.
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-
     #[getter]
     /// int: Configured sample rate in hertz.
     fn sample_rate(&self) -> u32 {
@@ -102,8 +97,14 @@ impl PySFLimiter {
 
     #[getter]
     /// int: Look-ahead latency in samples.
-    fn latency_samples(&self) -> usize {
-        self.inner.latency_samples()
+    fn lookahead_samples(&self) -> usize {
+        self.inner.lookahead_samples()
+    }
+
+    #[getter]
+    /// int: Look-ahead latency in samples. (alias for ``lookahead_samples``)
+    fn attack_samples(&self) -> usize {
+        self.inner.attack_samples()
     }
 
     #[getter]
@@ -120,10 +121,15 @@ impl PySFLimiter {
 
     fn __repr__(&self) -> String {
         format!(
-            "SFLimiter(sample_rate={}, threshold={}, latency_samples={})",
+            "SFLimiter(\
+            \n    sample_rate={}, threshold={},\
+            \n    lookahead_samples={}, hold_samples={}, release_samples={}\
+            \n)",
             self.inner.sample_rate(),
             self.inner.threshold(),
-            self.inner.latency_samples()
+            self.inner.lookahead_samples(),
+            self.inner.hold_samples(),
+            self.inner.release_samples()
         )
     }
 }

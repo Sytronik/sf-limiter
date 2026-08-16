@@ -51,9 +51,6 @@ class SFLimiter:
             ValueError: If the input shape, frame axis, or samples are invalid.
         """
 
-    def reset(self) -> None:
-        """Restore the internal gain envelope to its neutral state."""
-
     @property
     def sample_rate(self) -> int:
         """Configured sample rate in hertz."""
@@ -63,8 +60,12 @@ class SFLimiter:
         """Configured maximum absolute output sample."""
 
     @property
-    def latency_samples(self) -> int:
+    def lookahead_samples(self) -> int:
         """Look-ahead latency in samples."""
+
+    @property
+    def attack_samples(self) -> int:
+        """Look-ahead latency in samples. (alias for ``lookahead_samples``)"""
 
     @property
     def hold_samples(self) -> int:

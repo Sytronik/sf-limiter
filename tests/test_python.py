@@ -54,7 +54,7 @@ def test_frame_major_multichannel_input_never_clips() -> None:
 
     assert output.shape == audio.shape
     assert frame_gains.shape == (audio.shape[0],)
-    assert limiter.latency_samples == 240
+    assert limiter.lookahead_samples == 240
     assert_never_clips(output, 0.8)
 
 
@@ -241,3 +241,8 @@ def test_frame_major_non_finite_index_uses_input_order() -> None:
 
     with pytest.raises(ValueError, match="flat index 1"):
         sf_limiter.limit(audio, sample_rate=48_000, axis=0)
+
+
+def test_attack_samples_equals_to_lookahead_samples() -> None:
+    limiter = sf_limiter.SFLimiter(sample_rate=48_000, attack_ms=12.0)
+    assert limiter.attack_samples == limiter.lookahead_samples

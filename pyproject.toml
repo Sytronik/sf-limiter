@@ -1,21 +1,19 @@
-[build-system]
-build-backend = "maturin"
-requires = ["maturin>=1.9,<2"]
-
 [project]
+name = "sf-limiter"
+version = "0.1.0"
+
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Rust",
   "Typing :: Typed",
 ]
-dependencies = ["numpy>=1.23"]
 description = "Python bindings for a look-ahead brick-wall audio limiter"
 license = "MIT"
-name = "sf-limiter"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.1.0"
+
+dependencies = ["numpy>=1.23"]
 
 [dependency-groups]
 benchmark = [
@@ -26,6 +24,10 @@ dev = [
   "pytest>=8",
   "ruff~=0.16.1",
 ]
+
+[build-system]
+build-backend = "maturin"
+requires = ["maturin>=1.9,<2"]
 
 [tool.maturin]
 bindings = "pyo3"

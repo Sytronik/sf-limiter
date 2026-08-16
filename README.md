@@ -3,8 +3,8 @@
 `sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall audio limiter with a
 dependency-free Rust core and optional Python bindings for NumPy.
 
-> **Note:** The limiter algorithm itself was not AI-generated. Codex assisted only with
-> documentation and packaging-related work.
+> **Note:** The limiter algorithm itself was not AI-generated. Codex was used only to help with
+> API design, documentation, and packaging.
 
 It applies one linked gain value to every channel in a frame, preserving the
 relative balance between channels. Processing is offline: the output has the

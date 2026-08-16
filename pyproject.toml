@@ -2,18 +2,30 @@
 name = "sf-limiter"
 version = "0.1.0"
 
+authors = [
+  { name = "Sytronik", email = "sytronik210@gmail.com" },
+]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Rust",
   "Typing :: Typed",
 ]
 description = "Python bindings for a look-ahead brick-wall audio limiter"
+keywords = ["audio", "dsp", "limiter"]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = ["numpy>=1.23"]
+
+[project.urls]
+Homepage = "https://github.com/Sytronik/sf-limiter"
+Issues = "https://github.com/Sytronik/sf-limiter/issues"
+Repository = "https://github.com/Sytronik/sf-limiter"
 
 [dependency-groups]
 benchmark = [

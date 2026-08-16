@@ -97,8 +97,8 @@ def validate_outputs(
         result = function()
         if not isinstance(result, tuple) or len(result) != 2:
             raise RuntimeError(f"{name} returned an unexpected value")
-        output, gains = result
-        if output.shape != audio.shape or gains.shape != (audio.shape[1],):
+        output, frame_gains = result
+        if output.shape != audio.shape or frame_gains.shape != (audio.shape[1],):
             raise RuntimeError(f"{name} returned an unexpected shape")
         if output.dtype != np.float32 or not np.isfinite(output).all():
             raise RuntimeError(f"{name} returned invalid samples")
@@ -119,7 +119,9 @@ def print_header() -> None:
     print("Times include Python binding overhead and output allocation.")
     print("Inputs are contiguous channel-planar arrays shaped (channels, frames).")
     print("Deterministic input generation is excluded.")
-    print("sf-limiter returns audio and gains; numpy-audio-limiter returns audio only.")
+    print(
+        "sf-limiter returns audio and frame_gains; numpy-audio-limiter returns audio only."
+    )
     print(
         "Limiter parameters are analogous, but the algorithms are not numerically equivalent."
     )
@@ -160,13 +162,13 @@ def run(args: argparse.Namespace) -> None:
     release_coefficient = time_constant_coefficient(args.release_ms, args.sample_rate)
 
     print_header()
-    for duration_index, duration in enumerate(args.durations):
+    for i_duration, duration in enumerate(args.durations):
         frames = max(1, round(duration * args.sample_rate))
         for channels in args.channels:
             audio = make_audio(
                 frames,
                 channels,
-                seed=args.seed + duration_index * 1_000 + channels,
+                seed=args.seed + i_duration * 1_000 + channels,
             )
             limiter = sf_limiter.SFLimiter(
                 args.sample_rate,

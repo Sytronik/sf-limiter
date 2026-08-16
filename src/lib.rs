@@ -88,9 +88,9 @@ impl Error for LimiterError {}
 #[derive(Clone, Debug, PartialEq)]
 pub struct LimiterOutput {
     /// Limited audio in the same layout as the input.
-    pub samples: Vec<f32>,
+    pub audio: Vec<f32>,
     /// The gain applied to each frame.
-    pub gains: Vec<f32>,
+    pub frame_gains: Vec<f32>,
 }
 
 /// A look-ahead limiter with a finite-length, smoothly varying gain envelope.
@@ -161,14 +161,14 @@ impl SFLimiter {
     /// Processes a copy of frame-interleaved audio.
     pub fn process_interleaved(
         &mut self,
-        samples: &[f32],
+        audio: &[f32],
         channels: usize,
     ) -> Result<LimiterOutput, LimiterError> {
-        let mut output = samples.to_vec();
-        let gains = self.process_interleaved_inplace(&mut output, channels)?;
+        let mut output = audio.to_vec();
+        let frame_gains = self.process_interleaved_inplace(&mut output, channels)?;
         Ok(LimiterOutput {
-            samples: output,
-            gains,
+            audio: output,
+            frame_gains,
         })
     }
 
@@ -179,13 +179,13 @@ impl SFLimiter {
     /// array with the same length as the input.
     pub fn process_interleaved_inplace(
         &mut self,
-        samples: &mut [f32],
+        audio: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        let peaks = collect_interleaved_frame_peaks(samples, channels)?;
-        let gains = self.calculate_gains(peaks);
-        apply_interleaved_gains(samples, &gains, channels, self.threshold as f32);
-        Ok(gains)
+        let frame_peaks = collect_frame_peaks_from_interleaved(audio, channels)?;
+        let frame_gains = self.calculate_frame_gains(frame_peaks);
+        apply_frame_gains_to_interleaved(audio, &frame_gains, channels, self.threshold as f32);
+        Ok(frame_gains)
     }
 
     /// Processes a copy of channel-planar audio.
@@ -194,14 +194,14 @@ impl SFLimiter {
     /// every frame of the second channel, and so on.
     pub fn process_planar(
         &mut self,
-        samples: &[f32],
+        audio: &[f32],
         channels: usize,
     ) -> Result<LimiterOutput, LimiterError> {
-        let mut output = samples.to_vec();
-        let gains = self.process_planar_inplace(&mut output, channels)?;
+        let mut output = audio.to_vec();
+        let frame_gains = self.process_planar_inplace(&mut output, channels)?;
         Ok(LimiterOutput {
-            samples: output,
-            gains,
+            audio: output,
+            frame_gains,
         })
     }
 
@@ -212,46 +212,49 @@ impl SFLimiter {
     /// start of every call.
     pub fn process_planar_inplace(
         &mut self,
-        samples: &mut [f32],
+        audio: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        let peaks = collect_planar_frame_peaks(samples, channels)?;
-        let gains = self.calculate_gains(peaks);
-        apply_planar_gains(samples, &gains, self.threshold as f32);
-        Ok(gains)
+        let frame_peaks = collect_frame_peaks_from_planar(audio, channels)?;
+        let frame_gains = self.calculate_frame_gains(frame_peaks);
+        apply_frame_gains_to_planar(audio, &frame_gains, self.threshold as f32);
+        Ok(frame_gains)
     }
 
-    fn calculate_gains(&mut self, mut gains: Vec<f32>) -> Vec<f32> {
+    fn calculate_frame_gains(&mut self, frame_peaks: Vec<f32>) -> Vec<f32> {
         self.reset();
 
-        if gains.is_empty() {
-            return gains;
+        if frame_peaks.is_empty() {
+            return frame_peaks;
         }
 
-        let frame_count = gains.len();
-        for envelope_index in 0..frame_count + self.attack_samples {
-            let lookahead_peak = gains.get(envelope_index).map_or(0.0, |peak| *peak as f64);
+        let mut frame_gains = frame_peaks;
+        let frame_count = frame_gains.len();
+        for i_lookahead in 0..frame_count + self.attack_samples {
+            let lookahead_peak = frame_gains
+                .get(i_lookahead)
+                .map_or(0.0, |peak| *peak as f64);
             let envelope_gain = self.calculate_gain_from_peak(lookahead_peak);
 
-            if envelope_index < self.attack_samples {
+            if i_lookahead < self.attack_samples {
                 continue;
             }
 
-            let frame_index = envelope_index - self.attack_samples;
-            let current_peak = gains[frame_index] as f64;
-            let mut gain = envelope_gain;
+            let i_current_frame = i_lookahead - self.attack_samples;
+            let current_peak = frame_gains[i_current_frame] as f64;
 
             // The envelope construction should already satisfy this condition.
             // Lowering the whole frame is a numerical safety guard which keeps
             // rounding drift from ever crossing the configured ceiling.
-            if current_peak * gain > self.threshold {
-                gain = self.threshold / (current_peak + f64::EPSILON);
+            if current_peak * envelope_gain > self.threshold {
+                frame_gains[i_current_frame] =
+                    (self.threshold / (current_peak + f64::EPSILON)) as f32;
+            } else {
+                frame_gains[i_current_frame] = envelope_gain as f32;
             }
-            let applied_gain = gain as f32;
-            gains[frame_index] = applied_gain;
         }
 
-        gains
+        frame_gains
     }
 
     /// Restores the internal gain envelope to its neutral state.
@@ -322,62 +325,70 @@ fn validate_layout(sample_count: usize, channels: usize) -> Result<usize, Limite
     Ok(sample_count / channels)
 }
 
-fn collect_interleaved_frame_peaks(
-    samples: &[f32],
+fn collect_frame_peaks_from_interleaved(
+    audio: &[f32],
     channels: usize,
 ) -> Result<Vec<f32>, LimiterError> {
-    let frame_count = validate_layout(samples.len(), channels)?;
+    let frame_count = validate_layout(audio.len(), channels)?;
 
-    let mut peaks = Vec::with_capacity(frame_count);
-    for (frame_index, frame) in samples.chunks_exact(channels).enumerate() {
+    let mut frame_peaks = Vec::with_capacity(frame_count);
+    for (i_frame, frame) in audio.chunks_exact(channels).enumerate() {
         let mut peak = 0.0_f32;
-        for (channel_index, sample) in frame.iter().enumerate() {
+        for (i_channel, sample) in frame.iter().enumerate() {
             if !sample.is_finite() {
                 return Err(LimiterError::NonFiniteSample {
-                    index: frame_index * channels + channel_index,
+                    index: i_frame * channels + i_channel,
                 });
             }
             peak = peak.max(sample.abs());
         }
-        peaks.push(peak);
+        frame_peaks.push(peak);
     }
-    Ok(peaks)
+    Ok(frame_peaks)
 }
 
-fn collect_planar_frame_peaks(samples: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
-    let frame_count = validate_layout(samples.len(), channels)?;
-    if let Some(index) = samples.iter().position(|sample| !sample.is_finite()) {
-        return Err(LimiterError::NonFiniteSample { index });
+fn collect_frame_peaks_from_planar(
+    audio: &[f32],
+    channels: usize,
+) -> Result<Vec<f32>, LimiterError> {
+    let frame_count = validate_layout(audio.len(), channels)?;
+    if let Some(i) = audio.iter().position(|sample| !sample.is_finite()) {
+        return Err(LimiterError::NonFiniteSample { index: i });
     }
 
-    let mut peaks = vec![0.0_f32; frame_count];
+    let mut frame_peaks = vec![0.0_f32; frame_count];
     if frame_count == 0 {
-        return Ok(peaks);
+        return Ok(frame_peaks);
     }
 
-    for channel in samples.chunks_exact(frame_count) {
-        for (peak, sample) in peaks.iter_mut().zip(channel) {
+    for channel in audio.chunks_exact(frame_count) {
+        for (peak, sample) in frame_peaks.iter_mut().zip(channel) {
             *peak = peak.max(sample.abs());
         }
     }
-    Ok(peaks)
+    Ok(frame_peaks)
 }
 
-fn apply_interleaved_gains(samples: &mut [f32], gains: &[f32], channels: usize, threshold: f32) {
-    for (frame, gain) in samples.chunks_exact_mut(channels).zip(gains) {
+fn apply_frame_gains_to_interleaved(
+    audio: &mut [f32],
+    frame_gains: &[f32],
+    channels: usize,
+    threshold: f32,
+) {
+    for (frame, gain) in audio.chunks_exact_mut(channels).zip(frame_gains) {
         for sample in frame {
             *sample = (*sample * *gain).clamp(-threshold, threshold);
         }
     }
 }
 
-fn apply_planar_gains(samples: &mut [f32], gains: &[f32], threshold: f32) {
-    if gains.is_empty() {
+fn apply_frame_gains_to_planar(audio: &mut [f32], frame_gains: &[f32], threshold: f32) {
+    if frame_gains.is_empty() {
         return;
     }
 
-    for channel in samples.chunks_exact_mut(gains.len()) {
-        for (sample, gain) in channel.iter_mut().zip(gains) {
+    for channel in audio.chunks_exact_mut(frame_gains.len()) {
+        for (sample, gain) in channel.iter_mut().zip(frame_gains) {
             *sample = (*sample * *gain).clamp(-threshold, threshold);
         }
     }
@@ -416,7 +427,7 @@ mod tests {
     fn empty_audio_is_supported() {
         let mut limiter = SFLimiter::with_default(48_000).unwrap();
         let output = limiter.process_interleaved(&[], 2).unwrap();
-        assert!(output.samples.is_empty());
-        assert!(output.gains.is_empty());
+        assert!(output.audio.is_empty());
+        assert!(output.frame_gains.is_empty());
     }
 }

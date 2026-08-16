@@ -31,7 +31,7 @@ import numpy as np
 import sf_limiter
 
 audio = np.array([0.0, 0.5, 3.0, -4.0, 0.25], dtype=np.float64)
-limited, gains = sf_limiter.limit(audio, sample_rate=48_000)
+limited, frame_gains = sf_limiter.limit(audio, sample_rate=48_000)
 
 assert limited.dtype == np.float32
 assert np.max(np.abs(limited), initial=0.0) <= 1.0
@@ -55,14 +55,14 @@ limiter = sf_limiter.SFLimiter(
     hold_ms=15.0,
     release_ms=40.0,
 )
-limited, gains = limiter.process(audio)
+limited, frame_gains = limiter.process(audio)
 ```
 
 Input may be a one-dimensional mono array or a two-dimensional multichannel
 array. The last axis is interpreted as frames by default, so the usual shape is
 `(channels, frames)`. Pass `axis=0` for `(frames, channels)`. The
 input is converted to `float32` without being mutated; the returned audio is a
-new `float32` array, and `gains` contains one value per frame.
+new `float32` array, and `frame_gains` contains one value per frame.
 
 Each call starts from a neutral gain envelope. Non-finite samples and invalid
 configuration values raise `ValueError`.
@@ -86,7 +86,7 @@ let input = [0.0, 0.5, 3.0, -4.0, 0.25];
 let mut limiter = SFLimiter::with_default(48_000)?;
 let output = limiter.process_interleaved(&input, 1)?;
 
-assert!(output.samples.iter().all(|sample| sample.abs() <= 1.0));
+assert!(output.audio.iter().all(|sample| sample.abs() <= 1.0));
 # Ok::<(), sf_limiter::LimiterError>(())
 ```
 
@@ -98,9 +98,9 @@ For channel-planar audio:
 ```rust
 let mut planar = [0.0, 0.5, 3.0, -4.0, 0.25, -0.25];
 let mut limiter = SFLimiter::with_default(48_000)?;
-let gains = limiter.process_planar_inplace(&mut planar, 2)?;
+let frame_gains = limiter.process_planar_inplace(&mut planar, 2)?;
 
-assert_eq!(gains.len(), 3);
+assert_eq!(frame_gains.len(), 3);
 # Ok::<(), sf_limiter::LimiterError>(())
 ```
 

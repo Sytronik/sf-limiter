@@ -9,20 +9,33 @@ def assert_never_clips(audio: np.ndarray, ceiling: float = 1.0) -> None:
     assert np.max(np.abs(audio), initial=0.0) <= ceiling
 
 
+def test_audio_keyword_argument_is_supported() -> None:
+    audio = np.array([0.0, 2.0, -3.0], dtype=np.float32)
+
+    output, frame_gains = sf_limiter.limit(audio=audio, sample_rate=1_000)
+    assert output.shape == audio.shape
+    assert frame_gains.shape == audio.shape
+
+    limiter = sf_limiter.SFLimiter(1_000)
+    output, frame_gains = limiter.process(audio=audio)
+    assert output.shape == audio.shape
+    assert frame_gains.shape == audio.shape
+
+
 def test_float64_mono_input_never_clips() -> None:
     time = np.arange(48_000, dtype=np.float64)
     audio = np.sin(time * 0.071) * 8.0
     audio[::997] = 32.0
     original = audio.copy()
 
-    output, gains = sf_limiter.limit(audio, sample_rate=48_000)
+    output, frame_gains = sf_limiter.limit(audio, sample_rate=48_000)
 
     assert output.shape == audio.shape
     assert output.dtype == np.float32
-    assert gains.shape == audio.shape
+    assert frame_gains.shape == audio.shape
     assert np.array_equal(audio, original)
     assert_never_clips(output)
-    assert np.all((0.0 <= gains) & (gains <= 1.0))
+    assert np.all((0.0 <= frame_gains) & (frame_gains <= 1.0))
 
 
 def test_frame_major_multichannel_input_never_clips() -> None:
@@ -37,10 +50,10 @@ def test_frame_major_multichannel_input_never_clips() -> None:
         hold_ms=15.0,
         release_ms=40.0,
     )
-    output, gains = limiter.process(audio, axis=0)
+    output, frame_gains = limiter.process(audio, axis=0)
 
     assert output.shape == audio.shape
-    assert gains.shape == (audio.shape[0],)
+    assert frame_gains.shape == (audio.shape[0],)
     assert limiter.latency_samples == 240
     assert_never_clips(output, 0.8)
 
@@ -57,10 +70,10 @@ def test_channel_major_shape_is_preserved_by_default() -> None:
         hold_ms=0.0,
         release_ms=0.0,
     )
-    output, gains = limiter.process(audio)
+    output, frame_gains = limiter.process(audio)
 
     assert output.shape == audio.shape
-    assert gains.shape == (audio.shape[1],)
+    assert frame_gains.shape == (audio.shape[1],)
     assert_never_clips(output)
 
 
@@ -71,7 +84,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
     )
     channel_major = frame_major.T
 
-    frame_output, frame_gains = sf_limiter.limit(
+    frame_major_output, frame_gains_from_frame_major = sf_limiter.limit(
         frame_major,
         sample_rate=1_000,
         threshold=0.8,
@@ -80,7 +93,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
         release_ms=0.0,
         axis=0,
     )
-    channel_output, channel_gains = sf_limiter.limit(
+    channel_major_output, frame_gains_from_channel_major = sf_limiter.limit(
         channel_major,
         sample_rate=1_000,
         threshold=0.8,
@@ -89,8 +102,8 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
         release_ms=0.0,
     )
 
-    assert np.array_equal(channel_gains, frame_gains)
-    assert np.array_equal(channel_output.T, frame_output)
+    assert np.array_equal(frame_gains_from_channel_major, frame_gains_from_frame_major)
+    assert np.array_equal(channel_major_output.T, frame_major_output)
 
 
 def assert_non_contiguous_matches_contiguous(
@@ -100,7 +113,7 @@ def assert_non_contiguous_matches_contiguous(
     original = audio.copy()
     contiguous = np.ascontiguousarray(audio)
 
-    output, gains = sf_limiter.limit(
+    output, frame_gains = sf_limiter.limit(
         audio,
         sample_rate=1_000,
         threshold=0.8,
@@ -109,7 +122,7 @@ def assert_non_contiguous_matches_contiguous(
         release_ms=0.0,
         axis=axis,
     )
-    expected_output, expected_gains = sf_limiter.limit(
+    expected_output, expected_frame_gains = sf_limiter.limit(
         contiguous,
         sample_rate=1_000,
         threshold=0.8,
@@ -121,7 +134,7 @@ def assert_non_contiguous_matches_contiguous(
 
     assert np.array_equal(audio, original)
     assert np.array_equal(output, expected_output)
-    assert np.array_equal(gains, expected_gains)
+    assert np.array_equal(frame_gains, expected_frame_gains)
 
 
 @pytest.mark.parametrize(
@@ -200,12 +213,12 @@ def test_invalid_frame_axes_are_rejected(
 def test_empty_frame_dimension_is_supported(shape: tuple[int, int], axis: int) -> None:
     audio = np.zeros(shape, dtype=np.float32)
 
-    output, gains = sf_limiter.limit(audio, sample_rate=48_000, axis=axis)
+    output, frame_gains = sf_limiter.limit(audio, sample_rate=48_000, axis=axis)
 
     assert output.shape == audio.shape
     assert output.dtype == np.float32
-    assert gains.shape == (0,)
-    assert gains.dtype == np.float32
+    assert frame_gains.shape == (0,)
+    assert frame_gains.dtype == np.float32
 
 
 @pytest.mark.parametrize(

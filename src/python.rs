@@ -64,8 +64,8 @@ impl PySFLimiter {
     ///         equivalent.
     ///
     /// Returns:
-    ///     A tuple ``(audio, gains)``. ``audio`` is a new ``numpy.float32``
-    ///     array with the same shape as the input. ``gains`` is a
+    ///     A tuple ``(audio, frame_gains)``. ``audio`` is a new ``numpy.float32``
+    ///     array with the same shape as the input. ``frame_gains`` is a
     ///     one-dimensional ``numpy.float32`` array containing one linked gain
     ///     value per frame.
     ///
@@ -146,8 +146,8 @@ impl PySFLimiter {
 ///         equivalent.
 ///
 /// Returns:
-///     A tuple ``(audio, gains)``. ``audio`` is a new ``numpy.float32`` array
-///     with the same shape as the input. ``gains`` is a one-dimensional
+///     A tuple ``(audio, frame_gains)``. ``audio`` is a new ``numpy.float32`` array
+///     with the same shape as the input. ``frame_gains`` is a one-dimensional
 ///     ``numpy.float32`` array containing one linked gain value per frame.
 ///
 /// Raises:
@@ -186,7 +186,7 @@ fn process_numpy<'py>(
     axis: isize,
 ) -> PyProcessOutput<'py> {
     let shape = audio.shape().to_vec();
-    let (mut planar, channels, interleaved_shape) = match audio.ndim() {
+    let (mut planar_audio, channels, interleaved_shape) = match audio.ndim() {
         1 => {
             normalize_axis(axis, 1)?;
             let planar = audio.as_slice().map_or_else(
@@ -241,8 +241,8 @@ fn process_numpy<'py>(
     // The NumPy view and output allocation need the GIL, but the limiter core
     // only works with Rust-owned data. Detach while doing the CPU-intensive
     // part so other Python threads can run during processing.
-    let gains = py
-        .detach(|| limiter.process_planar_inplace(&mut planar, channels))
+    let frame_gains = py
+        .detach(|| limiter.process_planar_inplace(&mut planar_audio, channels))
         .map_err(|error| match (error, interleaved_shape) {
             (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
                 let channel = index / frames;
@@ -254,15 +254,15 @@ fn process_numpy<'py>(
             (error, _) => value_error(error),
         })?;
 
-    let shaped_samples = if let Some((frames, channels)) = interleaved_shape {
-        planar_to_interleaved(&planar, frames, channels)
+    let output_audio = if let Some((frames, channels)) = interleaved_shape {
+        planar_to_interleaved(&planar_audio, frames, channels)
     } else {
-        planar
+        planar_audio
     };
 
-    let output = ArrayD::from_shape_vec(IxDyn(&shape), shaped_samples)
+    let output_audio = ArrayD::from_shape_vec(IxDyn(&shape), output_audio)
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    Ok((output.into_pyarray(py), gains.into_pyarray(py)))
+    Ok((output_audio.into_pyarray(py), frame_gains.into_pyarray(py)))
 }
 
 fn planar_to_interleaved(samples: &[f32], frames: usize, channels: usize) -> Vec<f32> {

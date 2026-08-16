@@ -44,7 +44,7 @@ class SFLimiter:
                 ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
 
         Returns:
-            A tuple ``(audio, gains)`` containing the limited audio and one
+            A tuple ``(audio, frame_gains)`` containing the limited audio and one
             linked gain value per frame as ``numpy.float32`` arrays.
 
         Raises:
@@ -98,7 +98,7 @@ def limit(
             ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
 
     Returns:
-        A tuple ``(audio, gains)`` containing the limited audio and one linked
+        A tuple ``(audio, frame_gains)`` containing the limited audio and one linked
         gain value per frame as ``numpy.float32`` arrays.
 
     Raises:

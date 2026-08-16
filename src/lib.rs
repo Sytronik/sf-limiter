@@ -41,13 +41,14 @@ pub enum LimiterError {
 }
 
 impl Display for LimiterError {
+    #[allow(non_snake_case)]
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidSampleRate => formatter.write_str("sample_rate must be greater than zero"),
-            Self::InvalidThreshold(value) => {
+            Self::InvalidThreshold(threshold_dBFS) => {
                 write!(
                     formatter,
-                    "threshold must be finite and in (0, 1], got {value}"
+                    "threshold_dBFS must be a finite dBFS value less than or equal to 0, got {threshold_dBFS}"
                 )
             }
             Self::InvalidTime {
@@ -95,8 +96,10 @@ pub struct LimiterOutput {
 
 /// A look-ahead limiter with a finite-length, smoothly varying gain envelope.
 #[derive(Clone, Debug)]
+#[allow(non_snake_case)]
 pub struct SFLimiter {
     sample_rate: u32,
+    threshold_dBFS: f64,
     threshold: f64,
     attack_samples: usize,
     hold_samples: usize,
@@ -108,11 +111,15 @@ pub struct SFLimiter {
 impl SFLimiter {
     /// Builds a limiter from times expressed in milliseconds.
     ///
-    /// `threshold` must be in `(0, 1]`. `attack_ms` must round to at least one
-    /// sample; hold and release may be zero.
+    /// `threshold_dBFS` is expressed in dBFS and must be finite and at most
+    /// `0.0`. It is converted to a linear amplitude with
+    /// `10^(threshold_dBFS / 20)`.
+    /// `attack_ms` must round to at least one sample; hold and release may be
+    /// zero.
+    #[allow(non_snake_case)]
     pub fn new(
         sample_rate: u32,
-        threshold: f64,
+        threshold_dBFS: f64,
         attack_ms: f64,
         hold_ms: f64,
         release_ms: f64,
@@ -120,9 +127,10 @@ impl SFLimiter {
         if sample_rate == 0 {
             return Err(LimiterError::InvalidSampleRate);
         }
-        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) || threshold == 0.0 {
-            return Err(LimiterError::InvalidThreshold(threshold));
+        if !threshold_dBFS.is_finite() || threshold_dBFS > 0.0 {
+            return Err(LimiterError::InvalidThreshold(threshold_dBFS));
         }
+        let threshold = dBFS_to_amplitude(threshold_dBFS);
         validate_time("attack_ms", attack_ms)?;
         validate_time("hold_ms", hold_ms)?;
         validate_time("release_ms", release_ms)?;
@@ -141,6 +149,7 @@ impl SFLimiter {
 
         let mut limiter = Self {
             sample_rate,
+            threshold_dBFS,
             threshold,
             attack_samples,
             hold_samples,
@@ -152,10 +161,10 @@ impl SFLimiter {
         Ok(limiter)
     }
 
-    /// Builds the limiter with a 1.0 ceiling and 5/15/40 ms
+    /// Builds the limiter with a 0 dBFS ceiling and 5/15/40 ms
     /// attack/hold/release timing.
     pub fn with_default(sample_rate: u32) -> Result<Self, LimiterError> {
-        Self::new(sample_rate, 1.0, 5.0, 15.0, 40.0)
+        Self::new(sample_rate, 0.0, 5.0, 15.0, 40.0)
     }
 
     /// Processes a copy of frame-interleaved audio.
@@ -261,8 +270,15 @@ impl SFLimiter {
         self.sample_rate
     }
 
+    /// Returns the configured output ceiling as a linear amplitude.
     pub fn threshold(&self) -> f64 {
         self.threshold
+    }
+
+    /// Returns the configured output ceiling in dBFS.
+    #[allow(non_snake_case)]
+    pub fn threshold_dBFS(&self) -> f64 {
+        self.threshold_dBFS
     }
     /// Look-ahead latency in samples.
     pub fn lookahead_samples(&self) -> usize {
@@ -299,6 +315,11 @@ impl SFLimiter {
         let released = self.release.step(held);
         self.smoother.step(released).min(1.0)
     }
+}
+
+#[allow(non_snake_case)]
+fn dBFS_to_amplitude(threshold_dBFS: f64) -> f64 {
+    10.0_f64.powf(threshold_dBFS / 20.0)
 }
 
 fn validate_time(parameter: &'static str, value_ms: f64) -> Result<(), LimiterError> {
@@ -403,19 +424,39 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(non_snake_case)]
     fn rejects_invalid_configuration() {
         assert_eq!(
             SFLimiter::with_default(0).unwrap_err(),
             LimiterError::InvalidSampleRate
         );
         assert!(matches!(
-            SFLimiter::new(48_000, 1.1, 5.0, 15.0, 40.0),
-            Err(LimiterError::InvalidThreshold(1.1))
+            SFLimiter::new(48_000, 0.1, 5.0, 15.0, 40.0),
+            Err(LimiterError::InvalidThreshold(0.1))
         ));
         assert!(matches!(
-            SFLimiter::new(48_000, 1.0, 0.0, 15.0, 40.0),
+            SFLimiter::new(48_000, f64::NEG_INFINITY, 5.0, 15.0, 40.0),
+            Err(LimiterError::InvalidThreshold(threshold_dBFS))
+                if threshold_dBFS == f64::NEG_INFINITY
+        ));
+        assert!(matches!(
+            SFLimiter::new(48_000, f64::NAN, 5.0, 15.0, 40.0),
+            Err(LimiterError::InvalidThreshold(threshold_dBFS)) if threshold_dBFS.is_nan()
+        ));
+        assert!(matches!(
+            SFLimiter::new(48_000, 0.0, 0.0, 15.0, 40.0),
             Err(LimiterError::AttackTooShort { .. })
         ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn threshold_is_configured_in_dBFS() {
+        let threshold_dBFS = -6.0;
+        let limiter = SFLimiter::new(48_000, threshold_dBFS, 5.0, 15.0, 40.0).unwrap();
+
+        assert_eq!(limiter.threshold_dBFS(), threshold_dBFS);
+        assert_eq!(limiter.threshold(), 10.0_f64.powf(threshold_dBFS / 20.0));
     }
 
     #[test]
@@ -437,7 +478,7 @@ mod tests {
 
     #[test]
     fn attack_samples_equals_to_lookahead_samples() {
-        let limiter = SFLimiter::new(48_000, 1.0, 12.0, 15.0, 40.0).unwrap();
+        let limiter = SFLimiter::new(48_000, 0.0, 12.0, 15.0, 40.0).unwrap();
         assert_eq!(limiter.attack_samples(), limiter.lookahead_samples());
     }
 }

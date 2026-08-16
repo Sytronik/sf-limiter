@@ -39,7 +39,7 @@ assert np.max(np.abs(limited), initial=0.0) <= 1.0
 
 The one-shot `limit` function accepts these keyword parameters:
 
-- `threshold=1.0`
+- `threshold_dBFS=0.0` (dBFS)
 - `attack_ms=5.0`
 - `hold_ms=15.0`
 - `release_ms=40.0`
@@ -50,13 +50,16 @@ For repeated use, configure a limiter object once:
 ```python
 limiter = sf_limiter.SFLimiter(
     48_000,
-    threshold=0.95,
+    threshold_dBFS=-1.0,
     attack_ms=5.0,
     hold_ms=15.0,
     release_ms=40.0,
 )
 limited, frame_gains = limiter.process(audio)
 ```
+
+`limiter.threshold_dBFS` returns the configured dBFS value, while
+`limiter.threshold` returns the corresponding linear amplitude.
 
 Input may be a one-dimensional mono array or a two-dimensional multichannel
 array. The last axis is interpreted as frames by default, so the usual shape is
@@ -112,10 +115,12 @@ core path remains available to Rust callers.
 
 ## Ceiling guarantee
 
-For finite input, a valid channel count, and a threshold in `(0, 1]`, every
+For finite input, a valid channel count, and a finite `threshold_dBFS` no greater
+than `0.0` dBFS, every
 returned discrete sample is finite and has an absolute value no greater than
-the configured threshold. The test suite checks this with large impulses,
-high-level deterministic noise, mono input, and linked multichannel input.
+the corresponding linear ceiling (`10 ** (threshold_dBFS / 20)`). The test suite
+checks this with large impulses, high-level deterministic noise, mono input,
+and linked multichannel input.
 
 This is a sample-peak limiter. It does not oversample to detect reconstructed
 inter-sample (true-peak) excursions.

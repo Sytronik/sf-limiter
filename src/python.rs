@@ -15,7 +15,8 @@ type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, Py
 ///
 /// Args:
 ///     sample_rate: Sample rate in hertz. Must be greater than zero.
-///     threshold: Maximum absolute output sample, in ``(0, 1]``.
+///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
+///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
 ///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
 ///         least one sample at ``sample_rate``.
 ///     hold_ms: Hold time in milliseconds. May be zero.
@@ -34,20 +35,21 @@ impl PySFLimiter {
     /// Create a limiter with the requested ceiling and envelope timing.
     #[pyo3(signature = (
         sample_rate,
-        threshold = 1.0,
+        threshold_dBFS = 0.0,
         attack_ms = 5.0,
         hold_ms = 15.0,
         release_ms = 40.0
     ))]
+    #[allow(non_snake_case)]
     fn new(
         sample_rate: u32,
-        threshold: f64,
+        threshold_dBFS: f64,
         attack_ms: f64,
         hold_ms: f64,
         release_ms: f64,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: SFLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
+            inner: SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
                 .map_err(value_error)?,
         })
     }
@@ -90,9 +92,16 @@ impl PySFLimiter {
     }
 
     #[getter]
-    /// float: Configured maximum absolute output sample.
+    /// float: Configured output ceiling as a linear amplitude.
     fn threshold(&self) -> f64 {
         self.inner.threshold()
+    }
+
+    #[getter]
+    /// float: Configured output ceiling in dBFS.
+    #[allow(non_snake_case)]
+    fn threshold_dBFS(&self) -> f64 {
+        self.inner.threshold_dBFS()
     }
 
     #[getter]
@@ -122,10 +131,11 @@ impl PySFLimiter {
     fn __repr__(&self) -> String {
         format!(
             "SFLimiter(\
-            \n    sample_rate={}, threshold={},\
+            \n    sample_rate={}, threshold_dBFS={}, threshold={},\
             \n    lookahead_samples={}, hold_samples={}, release_samples={}\
             \n)",
             self.inner.sample_rate(),
+            self.inner.threshold_dBFS(),
             self.inner.threshold(),
             self.inner.lookahead_samples(),
             self.inner.hold_samples(),
@@ -141,7 +151,8 @@ impl PySFLimiter {
 ///         array. Values are converted to ``numpy.float32``; the input is not
 ///         modified.
 ///     sample_rate: Sample rate in hertz. Must be greater than zero.
-///     threshold: Maximum absolute output sample, in ``(0, 1]``.
+///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
+///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
 ///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
 ///         least one sample at ``sample_rate``.
 ///     hold_ms: Hold time in milliseconds. May be zero.
@@ -163,24 +174,25 @@ impl PySFLimiter {
 #[pyo3(signature = (
     audio,
     sample_rate,
-    threshold = 1.0,
+    threshold_dBFS = 0.0,
     attack_ms = 5.0,
     hold_ms = 15.0,
     release_ms = 40.0,
     axis = -1
 ))]
 #[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
 fn limit<'py>(
     py: Python<'py>,
     audio: PyArrayLikeDyn<'py, f32, AllowTypeChange>,
     sample_rate: u32,
-    threshold: f64,
+    threshold_dBFS: f64,
     attack_ms: f64,
     hold_ms: f64,
     release_ms: f64,
     axis: isize,
 ) -> PyProcessOutput<'py> {
-    let mut limiter = SFLimiter::new(sample_rate, threshold, attack_ms, hold_ms, release_ms)
+    let mut limiter = SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
         .map_err(value_error)?;
     process_numpy(py, &mut limiter, audio.as_array(), axis)
 }

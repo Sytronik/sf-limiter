@@ -15,7 +15,8 @@ class SFLimiter:
 
     Args:
         sample_rate: Sample rate in hertz. Must be greater than zero.
-        threshold: Maximum absolute output sample, in ``(0, 1]``.
+        threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
+            ``0.0`` is full scale and approximately ``-6.02`` is half scale.
         attack_ms: Look-ahead attack time in milliseconds. It must round to at
             least one sample at ``sample_rate``.
         hold_ms: Hold time in milliseconds. May be zero.
@@ -28,7 +29,7 @@ class SFLimiter:
     def __init__(
         self,
         sample_rate: int,
-        threshold: float = 1.0,
+        threshold_dBFS: float = 0.0,
         attack_ms: float = 5.0,
         hold_ms: float = 15.0,
         release_ms: float = 40.0,
@@ -57,7 +58,11 @@ class SFLimiter:
 
     @property
     def threshold(self) -> float:
-        """Configured maximum absolute output sample."""
+        """Configured output ceiling as a linear amplitude."""
+
+    @property
+    def threshold_dBFS(self) -> float:
+        """Configured output ceiling in dBFS."""
 
     @property
     def lookahead_samples(self) -> int:
@@ -78,7 +83,7 @@ class SFLimiter:
 def limit(
     audio: ArrayLike,
     sample_rate: int,
-    threshold: float = 1.0,
+    threshold_dBFS: float = 0.0,
     attack_ms: float = 5.0,
     hold_ms: float = 15.0,
     release_ms: float = 40.0,
@@ -91,7 +96,8 @@ def limit(
             array. Values are converted to ``numpy.float32``; the input is not
             modified.
         sample_rate: Sample rate in hertz. Must be greater than zero.
-        threshold: Maximum absolute output sample, in ``(0, 1]``.
+        threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
+            ``0.0`` is full scale and approximately ``-6.02`` is half scale.
         attack_ms: Look-ahead attack time in milliseconds.
         hold_ms: Hold time in milliseconds. May be zero.
         release_ms: Release time in milliseconds. May be zero.

@@ -172,7 +172,7 @@ def run(args: argparse.Namespace) -> None:
             )
             limiter = sf_limiter.SFLimiter(
                 args.sample_rate,
-                threshold=args.threshold,
+                threshold_dBFS=args.threshold_dBFS,
                 attack_ms=args.attack_ms,
                 hold_ms=0.0,
                 release_ms=args.release_ms,
@@ -190,7 +190,7 @@ def run(args: argparse.Namespace) -> None:
                 return sf_limiter.limit(
                     planar_audio,
                     sample_rate=args.sample_rate,
-                    threshold=args.threshold,
+                    threshold_dBFS=args.threshold_dBFS,
                     attack_ms=args.attack_ms,
                     hold_ms=0.0,
                     release_ms=args.release_ms,
@@ -203,7 +203,7 @@ def run(args: argparse.Namespace) -> None:
                     attack_coeff=attack_coefficient,
                     release_coeff=release_coefficient,
                     delay=attack_samples,
-                    threshold=args.threshold,
+                    threshold=10.0 ** (args.threshold_dBFS / 20.0),
                 )
 
             validate_outputs(
@@ -248,11 +248,13 @@ def nonnegative_float(value: str) -> float:
     return parsed
 
 
-def threshold_float(value: str) -> float:
-    parsed = positive_float(value)
-    if parsed > 1.0:
-        raise argparse.ArgumentTypeError("must be less than or equal to one")
-    return parsed
+def threshold_dBFS_float(value: str) -> float:
+    threshold_dBFS = float(value)
+    if not math.isfinite(threshold_dBFS) or threshold_dBFS > 0.0:
+        raise argparse.ArgumentTypeError(
+            "must be a finite dBFS value less than or equal to zero"
+        )
+    return threshold_dBFS
 
 
 def positive_int(value: str) -> int:
@@ -271,7 +273,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--channels", type=positive_int, nargs="+", default=DEFAULT_CHANNELS
     )
-    parser.add_argument("--threshold", type=threshold_float, default=0.8)
+    parser.add_argument(
+        "--threshold-dBFS",
+        type=threshold_dBFS_float,
+        default=-1.0,
+        help="output ceiling in dBFS (default: %(default)s)",
+    )
     parser.add_argument("--attack-ms", type=positive_float, default=5.0)
     parser.add_argument("--release-ms", type=nonnegative_float, default=40.0)
     parser.add_argument("--warmups", type=positive_int, default=3)

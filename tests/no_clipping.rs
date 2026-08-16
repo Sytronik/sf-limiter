@@ -1,5 +1,10 @@
 use sf_limiter::{LimiterError, SFLimiter};
 
+#[allow(non_snake_case)]
+fn threshold_from_dBFS(threshold_dBFS: f64) -> f32 {
+    10.0_f64.powf(threshold_dBFS / 20.0) as f32
+}
+
 fn assert_never_clips(audio: &[f32], ceiling: f32) {
     assert!(
         audio
@@ -55,17 +60,17 @@ fn linked_multichannel_signal_never_clips() {
         }
     }
 
-    let mut limiter = SFLimiter::new(48_000, 0.8, 5.0, 15.0, 40.0).unwrap();
+    let mut limiter = SFLimiter::new(48_000, -2.0, 5.0, 15.0, 40.0).unwrap();
     let output = limiter.process_interleaved(&input, channels).unwrap();
 
     assert_eq!(output.frame_gains.len(), frames);
-    assert_never_clips(&output.audio, 0.8);
+    assert_never_clips(&output.audio, threshold_from_dBFS(-2.0));
 }
 
 #[test]
 fn processing_in_place_has_the_same_hard_ceiling() {
     let mut audio = vec![4.0, -3.0, 2.0, -5.0, 0.25, -0.25];
-    let mut limiter = SFLimiter::new(1_000, 1.0, 1.0, 0.0, 0.0).unwrap();
+    let mut limiter = SFLimiter::new(1_000, 0.0, 1.0, 0.0, 0.0).unwrap();
 
     let frame_gains = limiter.process_interleaved_inplace(&mut audio, 2).unwrap();
 
@@ -77,7 +82,7 @@ fn processing_in_place_has_the_same_hard_ceiling() {
 fn repeated_calls_start_from_a_neutral_envelope() {
     let hot_input = vec![8.0; 16];
     let quiet_input = vec![0.25; 8];
-    let mut reused_limiter = SFLimiter::new(1_000, 1.0, 3.0, 2.0, 1_000.0).unwrap();
+    let mut reused_limiter = SFLimiter::new(1_000, 0.0, 3.0, 2.0, 1_000.0).unwrap();
     let mut fresh_limiter = reused_limiter.clone();
 
     reused_limiter.process_interleaved(&hot_input, 1).unwrap();
@@ -90,20 +95,20 @@ fn repeated_calls_start_from_a_neutral_envelope() {
 #[test]
 fn samples_use_the_reported_f32_gain() {
     let input = [1.1_f32, 0.1_f32];
-    let mut limiter = SFLimiter::new(1_000, 0.3, 1.0, 0.0, 0.0).unwrap();
+    let mut limiter = SFLimiter::new(1_000, -10.0, 1.0, 0.0, 0.0).unwrap();
 
     let output = limiter.process_interleaved(&input, 2).unwrap();
 
     assert_eq!(output.audio[1], input[1] * output.frame_gains[0]);
     assert_ne!(output.frame_gains[0], 1.0);
-    assert_never_clips(&output.audio, 0.3);
+    assert_never_clips(&output.audio, threshold_from_dBFS(-10.0));
 }
 
 #[test]
 fn planar_processing_matches_interleaved_processing() {
     let interleaved = [0.0, 0.0, 4.0, -5.0, -3.0, 2.0, 0.2, -0.2];
     let mut planar = [0.0, 4.0, -3.0, 0.2, 0.0, -5.0, 2.0, -0.2];
-    let mut interleaved_limiter = SFLimiter::new(1_000, 0.8, 1.0, 0.0, 0.0).unwrap();
+    let mut interleaved_limiter = SFLimiter::new(1_000, -2.0, 1.0, 0.0, 0.0).unwrap();
     let mut planar_limiter = interleaved_limiter.clone();
 
     let interleaved_output = interleaved_limiter
@@ -118,7 +123,7 @@ fn planar_processing_matches_interleaved_processing() {
         .collect();
     assert_eq!(planar_frame_gains, interleaved_output.frame_gains);
     assert_eq!(planar_as_interleaved, interleaved_output.audio);
-    assert_never_clips(&planar, 0.8);
+    assert_never_clips(&planar, threshold_from_dBFS(-2.0));
 }
 
 #[test]

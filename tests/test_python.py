@@ -3,6 +3,9 @@ import pytest
 
 import sf_limiter
 
+threshold_dBFS = -2.0
+threshold = float(np.float32(10.0 ** (threshold_dBFS / 20.0)))
+
 
 def assert_never_clips(audio: np.ndarray, ceiling: float = 1.0) -> None:
     assert np.isfinite(audio).all()
@@ -20,6 +23,25 @@ def test_audio_keyword_argument_is_supported() -> None:
     output, frame_gains = limiter.process(audio=audio)
     assert output.shape == audio.shape
     assert frame_gains.shape == audio.shape
+
+
+def test_threshold_is_configured_in_dBFS() -> None:
+    audio = np.array([2.0, -2.0], dtype=np.float32)
+    threshold_dBFS = -6.0
+    threshold = float(np.float32(10.0 ** (threshold_dBFS / 20.0)))
+    limiter = sf_limiter.SFLimiter(1_000, threshold_dBFS=threshold_dBFS, attack_ms=1.0)
+
+    output, _ = limiter.process(audio)
+
+    assert limiter.threshold_dBFS == threshold_dBFS
+    assert limiter.threshold == pytest.approx(threshold)
+    assert_never_clips(output, threshold)
+
+
+@pytest.mark.parametrize("threshold_dBFS", [0.1, np.inf, -np.inf, np.nan])
+def test_invalid_dBFS_threshold_is_rejected(threshold_dBFS: float) -> None:
+    with pytest.raises(ValueError, match="finite dBFS value"):
+        sf_limiter.SFLimiter(48_000, threshold_dBFS=threshold_dBFS)
 
 
 def test_float64_mono_input_never_clips() -> None:
@@ -45,7 +67,7 @@ def test_frame_major_multichannel_input_never_clips() -> None:
 
     limiter = sf_limiter.SFLimiter(
         48_000,
-        threshold=0.8,
+        threshold_dBFS=threshold_dBFS,
         attack_ms=5.0,
         hold_ms=15.0,
         release_ms=40.0,
@@ -55,7 +77,7 @@ def test_frame_major_multichannel_input_never_clips() -> None:
     assert output.shape == audio.shape
     assert frame_gains.shape == (audio.shape[0],)
     assert limiter.lookahead_samples == 240
-    assert_never_clips(output, 0.8)
+    assert_never_clips(output, threshold)
 
 
 def test_channel_major_shape_is_preserved_by_default() -> None:
@@ -87,7 +109,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
     frame_major_output, frame_gains_from_frame_major = sf_limiter.limit(
         frame_major,
         sample_rate=1_000,
-        threshold=0.8,
+        threshold_dBFS=threshold_dBFS,
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
@@ -96,7 +118,7 @@ def test_channel_major_processing_matches_frame_major_processing() -> None:
     channel_major_output, frame_gains_from_channel_major = sf_limiter.limit(
         channel_major,
         sample_rate=1_000,
-        threshold=0.8,
+        threshold_dBFS=threshold_dBFS,
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
@@ -116,7 +138,7 @@ def assert_non_contiguous_matches_contiguous(
     output, frame_gains = sf_limiter.limit(
         audio,
         sample_rate=1_000,
-        threshold=0.8,
+        threshold_dBFS=threshold_dBFS,
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,
@@ -125,7 +147,7 @@ def assert_non_contiguous_matches_contiguous(
     expected_output, expected_frame_gains = sf_limiter.limit(
         contiguous,
         sample_rate=1_000,
-        threshold=0.8,
+        threshold_dBFS=threshold_dBFS,
         attack_ms=1.0,
         hold_ms=0.0,
         release_ms=0.0,

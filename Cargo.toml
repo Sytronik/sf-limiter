@@ -1,6 +1,6 @@
 [package]
 name = "sf-limiter"
-version = "0.1.0"
+version = "0.1.1"
 
 authors = ["Sytronik <sytronik210@gmail.com>"]
 categories = ["multimedia::audio"]

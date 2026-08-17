@@ -1,5 +1,10 @@
 # sf-limiter
 
+[![PyPI version](https://img.shields.io/pypi/v/sf-limiter)](https://pypi.org/project/sf-limiter/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/sf-limiter)](https://pypi.org/project/sf-limiter/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Sytronik/sf-limiter/blob/main/LICENSE)
+<!-- [![Crates.io version](https://img.shields.io/crates/v/sf-limiter)](https://crates.io/crates/sf-limiter) -->
+
 `sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall
 audio limiter with a Rust core and Python bindings for NumPy.
 

@@ -1,6 +1,6 @@
 [project]
 name = "sf-limiter"
-version = "0.1.0"
+version = "0.1.1"
 
 authors = [
   {name = "Sytronik", email = "sytronik210@gmail.com"},

@@ -3,7 +3,7 @@ name = "sf-limiter"
 version = "0.1.0"
 
 authors = [
-  { name = "Sytronik", email = "sytronik210@gmail.com" },
+  {name = "Sytronik", email = "sytronik210@gmail.com"},
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -14,7 +14,7 @@ classifiers = [
   "Programming Language :: Rust",
   "Typing :: Typed",
 ]
-description = "Python bindings for a look-ahead brick-wall audio limiter"
+description = "look-ahead brick-wall audio limiter library for Python, implemented in Rust"
 keywords = ["audio", "dsp", "limiter"]
 license = "MIT"
 readme = "README.md"

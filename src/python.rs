@@ -14,7 +14,7 @@ type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, Py
 /// starts with a neutral gain envelope.
 ///
 /// Args:
-///     sample_rate: Sample rate in hertz. Must be greater than zero.
+///     sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
 ///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
 ///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
 ///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
@@ -42,12 +42,13 @@ impl PySFLimiter {
     ))]
     #[allow(non_snake_case)]
     fn new(
-        sample_rate: u32,
+        sample_rate: &Bound<'_, PyAny>,
         threshold_dBFS: f64,
         attack_ms: f64,
         hold_ms: f64,
         release_ms: f64,
     ) -> PyResult<Self> {
+        let sample_rate = parse_sample_rate(sample_rate)?;
         Ok(Self {
             inner: SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
                 .map_err(value_error)?,
@@ -150,7 +151,7 @@ impl PySFLimiter {
 ///     audio: A one-dimensional mono array or a two-dimensional multichannel
 ///         array. Values are converted to ``numpy.float32``; the input is not
 ///         modified.
-///     sample_rate: Sample rate in hertz. Must be greater than zero.
+///     sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
 ///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
 ///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
 ///     attack_ms: Look-ahead attack time in milliseconds. It must round to at
@@ -185,16 +186,29 @@ impl PySFLimiter {
 fn limit<'py>(
     py: Python<'py>,
     audio: PyArrayLikeDyn<'py, f32, AllowTypeChange>,
-    sample_rate: u32,
+    sample_rate: &Bound<'_, PyAny>,
     threshold_dBFS: f64,
     attack_ms: f64,
     hold_ms: f64,
     release_ms: f64,
     axis: isize,
 ) -> PyProcessOutput<'py> {
+    let sample_rate = parse_sample_rate(sample_rate)?;
     let mut limiter = SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
         .map_err(value_error)?;
     process_numpy(py, &mut limiter, audio.as_array(), axis)
+}
+
+fn parse_sample_rate(sample_rate: &Bound<'_, PyAny>) -> PyResult<u32> {
+    let sample_rate = sample_rate
+        .extract::<u32>()
+        .map_err(|_| PyValueError::new_err("sample_rate must be a positive 32-bit integer"))?;
+    if sample_rate == 0 {
+        return Err(PyValueError::new_err(
+            "sample_rate must be a positive 32-bit integer",
+        ));
+    }
+    Ok(sample_rate)
 }
 
 fn process_numpy<'py>(

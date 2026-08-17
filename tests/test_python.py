@@ -25,6 +25,17 @@ def test_audio_keyword_argument_is_supported() -> None:
     assert frame_gains.shape == audio.shape
 
 
+@pytest.mark.parametrize("sample_rate", [-1, 0, 2**32, 2**128])
+def test_invalid_sample_rate_raises_value_error(sample_rate: int) -> None:
+    message = "sample_rate must be a positive 32-bit integer"
+
+    with pytest.raises(ValueError, match=message):
+        sf_limiter.SFLimiter(sample_rate)
+
+    with pytest.raises(ValueError, match=message):
+        sf_limiter.limit(np.zeros(1, dtype=np.float32), sample_rate=sample_rate)
+
+
 def test_threshold_is_configured_in_dBFS() -> None:
     audio = np.array([2.0, -2.0], dtype=np.float32)
     threshold_dBFS = -6.0

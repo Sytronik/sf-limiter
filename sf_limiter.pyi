@@ -14,7 +14,7 @@ class SFLimiter:
     starts with a neutral gain envelope.
 
     Args:
-        sample_rate: Sample rate in hertz. Must be greater than zero.
+        sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
         threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
             ``0.0`` is full scale and approximately ``-6.02`` is half scale.
         attack_ms: Look-ahead attack time in milliseconds. It must round to at
@@ -95,7 +95,7 @@ def limit(
         audio: A one-dimensional mono array or a two-dimensional multichannel
             array. Values are converted to ``numpy.float32``; the input is not
             modified.
-        sample_rate: Sample rate in hertz. Must be greater than zero.
+        sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
         threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
             ``0.0`` is full scale and approximately ``-6.02`` is half scale.
         attack_ms: Look-ahead attack time in milliseconds.

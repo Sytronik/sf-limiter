@@ -1,28 +1,28 @@
-# sf-limiter (WIP)
+# sf-limiter
 
-`sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall audio limiter with a
-dependency-free Rust core and optional Python bindings for NumPy.
-
-> **Note:** The limiter algorithm itself was not AI-generated. Codex was used only to help with
-> API design, documentation, and packaging.
+`sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall
+audio limiter with a dependency-free Rust core and optional Python bindings
+for NumPy.
 
 It applies one linked gain value to every channel in a frame, preserving the
-relative balance between channels. Processing is offline: the output has the
-same shape and length as the input, while the limiter uses future samples equal
-to its attack-time look-ahead.
+relative balance between channels.
+
+> **Non-streaming:** The current API processes a complete audio buffer offline.
+> Each call starts with a fresh gain envelope, so limiter state does not carry
+> across chunks or successive calls. The output has the same shape and length
+> as the input, while the limiter uses future samples equal to its attack-time
+> look-ahead.
+
+> **Note:** The limiter algorithm itself was not AI-generated. Codex was used
+> only to help with API design, documentation, and packaging.
 
 ## Python 3.11+
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
-create the Python 3.11 virtual environment and install the package with:
+Install the package from PyPI:
 
 ```shell
-uv sync --no-dev
+python -m pip install sf-limiter
 ```
-
-`uv` installs a compatible Python 3.11 interpreter when needed, creates the
-project's `.venv`, builds the Rust extension, and installs the locked
-dependencies.
 
 Limit a mono NumPy array:
 
@@ -133,7 +133,9 @@ The limiter design was informed by Geraint Luff's
 article's look-ahead structure: a moving minimum of permissible gain, an
 exponential release, and finite-length cascaded box-filter smoothing.
 
-The Rust implementation was extracted from `limiter.rs` in [thesia](https://github.com/Sytronik/thesia) and adapted into a standalone crate with a dependency-free core.
+The Rust implementation was extracted from `limiter.rs` in
+[thesia](https://github.com/Sytronik/thesia) and adapted into a standalone
+crate with a dependency-free core.
 
 ## Development
 
@@ -163,3 +165,10 @@ The benchmark uses contiguous channel-planar arrays shaped
 `(channels, frames)` for both implementations and measures reusable and
 one-shot `sf_limiter` calls separately. Use `--help` to select durations,
 channel counts, timing repetitions, and limiter settings.
+
+## TODO
+
+- [ ] Refine the Rust API
+- [ ] Add a streaming API
+- [ ] Publish the crate to crates.io
+- [ ] Implement an optional true-peak limiter with oversampling

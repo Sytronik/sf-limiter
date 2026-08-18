@@ -48,6 +48,7 @@ The one-shot `limit` function accepts these keyword parameters:
 - `hold_ms=15.0`
 - `release_ms=40.0`
 - `axis=-1`
+- `true_peak=False`
 
 For repeated use, configure a limiter object once:
 
@@ -58,12 +59,20 @@ limiter = sf_limiter.SFLimiter(
     attack_ms=5.0,
     hold_ms=15.0,
     release_ms=40.0,
+    true_peak=True,
 )
 limited, frame_gains = limiter.process(audio)
 ```
 
 `limiter.threshold_dBFS` returns the configured dBFS value, while
-`limiter.threshold` returns the corresponding linear amplitude.
+`limiter.threshold` returns the corresponding linear amplitude and
+`limiter.true_peak` reports whether true-peak limiting is enabled. With
+`true_peak=True`, the limiter uses the
+[ITU-R BS.1770-5](https://www.itu.int/rec/R-REC-BS.1770-5-202311-I/en)
+Annex 2 estimator when calculating gain. It does not remeasure and correct the
+processed output, so `threshold_dBFS` is not a guaranteed dBTP ceiling.
+With `true_peak=True`, supported sample rates are 8, 11.025, 12, 16, 22.05,
+24, 32, 44.1, 48, 88.2, and 96 kHz, as well as 176.4 kHz and higher.
 
 Input may be a one-dimensional mono array or a two-dimensional multichannel
 array. The last axis is interpreted as frames by default, so the usual shape is
@@ -117,17 +126,27 @@ The Python binding always uses the planar core path. Default two-dimensional
 then restored to its original layout for the returned array. The interleaved
 core path remains available to Rust callers.
 
+`SFLimiter::new` accepts `true_peak` as its final boolean argument. The
+`with_default` constructor keeps true-peak processing disabled. True-peak
+detection supports 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz,
+as well as 176.4 kHz and higher. Other sample rates are rejected when
+`true_peak` is enabled; sample-peak mode accepts any positive `u32` sample
+rate.
+
 ## Ceiling guarantee
 
 For finite input, a valid channel count, and a finite `threshold_dBFS` no greater
-than `0.0` dBFS, every
-returned discrete sample is finite and has an absolute value no greater than
-the corresponding linear ceiling (`10 ** (threshold_dBFS / 20)`). The test suite
-checks this with large impulses, high-level deterministic noise, mono input,
-and linked multichannel input.
+than `0.0` dBFS, every returned discrete sample is finite and has an absolute
+value no greater than the corresponding linear ceiling
+(`10 ** (threshold_dBFS / 20)`). The test suite checks this with large impulses,
+high-level deterministic noise, mono input, and linked multichannel input.
 
-This is a sample-peak limiter. It does not oversample to detect reconstructed
-inter-sample (true-peak) excursions.
+This is a brick-wall guarantee for discrete sample peaks in both modes. With
+true-peak limiting enabled, the BS.1770-5 estimate is used to calculate the
+gain envelope and generally reduces inter-sample peaks. Gain changes can create
+new reconstructed peaks, however, and the output is not remeasured or corrected.
+The output true peak is therefore not guaranteed to stay below the configured
+ceiling.
 
 ## Design reference
 
@@ -175,4 +194,4 @@ channel counts, timing repetitions, and limiter settings.
 - [ ] Refine the Rust API
 - [ ] Add a streaming API
 - [ ] Publish the crate to crates.io
-- [ ] Implement an optional true-peak limiter with oversampling
+- [x] Implement an optional true-peak limiter with oversampling

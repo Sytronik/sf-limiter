@@ -21,6 +21,11 @@ type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, Py
 ///         least one sample at ``sample_rate``.
 ///     hold_ms: Hold time in milliseconds. May be zero.
 ///     release_ms: Release time in milliseconds. May be zero.
+///     true_peak: If true, use ITU-R BS.1770-5 true-peak detection to calculate
+///         limiter gain. The processed output true peak is not guaranteed to
+///         remain below the ceiling. Supported sample rates are 8, 11.025, 12,
+///         16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz, plus every rate at or
+///         above 176.4 kHz.
 ///
 /// Raises:
 ///     ValueError: If any configuration value is invalid.
@@ -38,7 +43,8 @@ impl PySFLimiter {
         threshold_dBFS = 0.0,
         attack_ms = 5.0,
         hold_ms = 15.0,
-        release_ms = 40.0
+        release_ms = 40.0,
+        true_peak = false
     ))]
     #[allow(non_snake_case)]
     fn new(
@@ -47,11 +53,19 @@ impl PySFLimiter {
         attack_ms: f64,
         hold_ms: f64,
         release_ms: f64,
+        true_peak: bool,
     ) -> PyResult<Self> {
         let sample_rate = parse_sample_rate(sample_rate)?;
         Ok(Self {
-            inner: SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
-                .map_err(value_error)?,
+            inner: SFLimiter::new(
+                sample_rate,
+                threshold_dBFS,
+                attack_ms,
+                hold_ms,
+                release_ms,
+                true_peak,
+            )
+            .map_err(value_error)?,
         })
     }
 
@@ -106,6 +120,12 @@ impl PySFLimiter {
     }
 
     #[getter]
+    /// bool: Whether ITU-R BS.1770-5 true-peak limiting is enabled.
+    fn true_peak(&self) -> bool {
+        self.inner.true_peak()
+    }
+
+    #[getter]
     /// int: Look-ahead latency in samples.
     fn lookahead_samples(&self) -> usize {
         self.inner.lookahead_samples()
@@ -132,12 +152,13 @@ impl PySFLimiter {
     fn __repr__(&self) -> String {
         format!(
             "SFLimiter(\
-            \n    sample_rate={}, threshold_dBFS={}, threshold={},\
+            \n    sample_rate={}, threshold_dBFS={}, threshold={}, true_peak={},\
             \n    lookahead_samples={}, hold_samples={}, release_samples={}\
             \n)",
             self.inner.sample_rate(),
             self.inner.threshold_dBFS(),
             self.inner.threshold(),
+            self.inner.true_peak(),
             self.inner.lookahead_samples(),
             self.inner.hold_samples(),
             self.inner.release_samples()
@@ -162,6 +183,11 @@ impl PySFLimiter {
 ///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``. For
 ///         mono input, ``0`` and ``-1`` are
 ///         equivalent.
+///     true_peak: If true, use ITU-R BS.1770-5 true-peak detection to calculate
+///         limiter gain. The processed output true peak is not guaranteed to
+///         remain below the ceiling. Supported sample rates are 8, 11.025, 12,
+///         16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz, plus every rate at or
+///         above 176.4 kHz.
 ///
 /// Returns:
 ///     A tuple ``(audio, frame_gains)``. ``audio`` is a new ``numpy.float32`` array
@@ -179,7 +205,8 @@ impl PySFLimiter {
     attack_ms = 5.0,
     hold_ms = 15.0,
     release_ms = 40.0,
-    axis = -1
+    axis = -1,
+    true_peak = false
 ))]
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
@@ -192,10 +219,18 @@ fn limit<'py>(
     hold_ms: f64,
     release_ms: f64,
     axis: isize,
+    true_peak: bool,
 ) -> PyProcessOutput<'py> {
     let sample_rate = parse_sample_rate(sample_rate)?;
-    let mut limiter = SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
-        .map_err(value_error)?;
+    let mut limiter = SFLimiter::new(
+        sample_rate,
+        threshold_dBFS,
+        attack_ms,
+        hold_ms,
+        release_ms,
+        true_peak,
+    )
+    .map_err(value_error)?;
     process_numpy(py, &mut limiter, audio.as_array(), axis)
 }
 

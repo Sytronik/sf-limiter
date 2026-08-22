@@ -4,9 +4,9 @@ use crate::{LimiterError, layout::validate_layout};
 
 use super::{
     CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_ADDITIONAL_PHASES, InterpolationFactor,
-    PeakStrategy, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES, interpolated_peak_at_frame,
-    pre_upsample_coefficients, pre_upsample_sample, reduce_upsampled_peaks,
-    validate_finite_samples,
+    PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakStrategy, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
+    interpolated_peak_at_frame, pre_upsample_coefficients, pre_upsample_sample,
+    reduce_upsampled_peaks, validate_finite_samples,
 };
 
 pub(super) fn collect(
@@ -150,19 +150,64 @@ fn pre_upsample(audio: &[f32], channels: usize, frame_count: usize, factor: usiz
     let coefficients = pre_upsample_coefficients(factor);
     let upsampled_frame_count = frame_count * factor;
     let mut upsampled = vec![0.0; audio.len() * factor];
+    let mut phase_output = vec![0.0; frame_count];
+    let (interior_start, interior_end) = if frame_count < PRE_UPSAMPLE_TAPS {
+        (frame_count, frame_count)
+    } else {
+        (
+            PRE_UPSAMPLE_CENTER,
+            frame_count - (PRE_UPSAMPLE_TAPS - PRE_UPSAMPLE_CENTER - 1),
+        )
+    };
+
     for i_channel in 0..channels {
         let input_offset = i_channel * frame_count;
         let output_offset = i_channel * upsampled_frame_count;
         let channel_audio = &audio[input_offset..input_offset + frame_count];
         let channel_output = &mut upsampled[output_offset..output_offset + upsampled_frame_count];
-        for frame in 0..frame_count {
-            for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor) {
-                channel_output[frame * factor + i_phase] = pre_upsample_sample(
+
+        for (output_frame, &sample) in channel_output.chunks_exact_mut(factor).zip(channel_audio) {
+            output_frame[0] = sample;
+        }
+
+        for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor).skip(1) {
+            for (i_frame, output_sample) in phase_output[..interior_start].iter_mut().enumerate() {
+                *output_sample = pre_upsample_sample(
                     |source_frame| channel_audio[source_frame],
-                    frame,
+                    i_frame,
                     frame_count,
                     phase_coefficients,
                 );
+            }
+
+            if interior_start < interior_end {
+                phase_output[interior_start..interior_end].fill(0.0);
+                let interior_length = interior_end - interior_start;
+                for (tap, &coefficient) in phase_coefficients.iter().enumerate() {
+                    let source_start = interior_start + tap - PRE_UPSAMPLE_CENTER;
+                    let source = &channel_audio[source_start..source_start + interior_length];
+                    for (output_sample, &input_sample) in phase_output[interior_start..interior_end]
+                        .iter_mut()
+                        .zip(source)
+                    {
+                        *output_sample += input_sample * coefficient;
+                    }
+                }
+            }
+
+            for (i_frame, output_sample) in phase_output[interior_end..].iter_mut().enumerate() {
+                *output_sample = pre_upsample_sample(
+                    |source_frame| channel_audio[source_frame],
+                    interior_end + i_frame,
+                    frame_count,
+                    phase_coefficients,
+                );
+            }
+
+            for (output_frame, &sample) in
+                channel_output.chunks_exact_mut(factor).zip(&phase_output)
+            {
+                output_frame[i_phase] = sample;
             }
         }
     }
@@ -173,6 +218,35 @@ fn pre_upsample(audio: &[f32], channels: usize, frame_count: usize, factor: usiz
 mod tests {
     use super::*;
     use crate::peak::convolve_scalar;
+
+    fn pre_upsample_reference(
+        audio: &[f32],
+        channels: usize,
+        frame_count: usize,
+        factor: usize,
+    ) -> Vec<f32> {
+        let coefficients = pre_upsample_coefficients(factor);
+        let upsampled_frame_count = frame_count * factor;
+        let mut upsampled = vec![0.0; audio.len() * factor];
+        for i_channel in 0..channels {
+            let input_offset = i_channel * frame_count;
+            let output_offset = i_channel * upsampled_frame_count;
+            let channel_audio = &audio[input_offset..input_offset + frame_count];
+            let channel_output =
+                &mut upsampled[output_offset..output_offset + upsampled_frame_count];
+            for frame in 0..frame_count {
+                for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor) {
+                    channel_output[frame * factor + i_phase] = pre_upsample_sample(
+                        |source_frame| channel_audio[source_frame],
+                        frame,
+                        frame_count,
+                        phase_coefficients,
+                    );
+                }
+            }
+        }
+        upsampled
+    }
 
     #[test]
     fn phase_convolution_uses_the_same_fir_order() {
@@ -190,6 +264,32 @@ mod tests {
                 peaks[index + CENTER_TAP],
                 convolve_scalar(&samples, &COEFFICIENTS[1]).abs()
             );
+        }
+    }
+
+    #[test]
+    fn vectorizable_pre_upsampling_matches_scalar_reference() {
+        for channels in [1, 2, 3, 4, 8] {
+            for frame_count in [0, 1, 11, 12, 23, 24, 25, 257] {
+                let channel_samples: Vec<Vec<f32>> = (0..channels)
+                    .map(|channel| {
+                        (0..frame_count)
+                            .map(|frame| {
+                                let index = channel * frame_count + frame;
+                                ((index as f64 * 0.731).sin() + (index as f64 * 0.193).cos()) as f32
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let audio: Vec<_> = channel_samples.into_iter().flatten().collect();
+                for factor in [2, 3, 4, 6] {
+                    assert_eq!(
+                        pre_upsample(&audio, channels, frame_count, factor),
+                        pre_upsample_reference(&audio, channels, frame_count, factor),
+                        "channels={channels}, frame_count={frame_count}, factor={factor}"
+                    );
+                }
+            }
         }
     }
 }

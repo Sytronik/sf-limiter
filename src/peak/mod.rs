@@ -41,8 +41,8 @@ pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
     ],
 ];
 
-const PRE_UPSAMPLE_TAPS: usize = 24;
-const PRE_UPSAMPLE_CENTER: isize = 11;
+pub(super) const PRE_UPSAMPLE_TAPS: usize = 24;
+pub(super) const PRE_UPSAMPLE_CENTER: usize = 11;
 const MAX_PRE_UPSAMPLE_FACTOR: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,7 +154,7 @@ pub(super) fn pre_upsample_sample(
 ) -> f32 {
     let mut sum = 0.0_f32;
     for (tap, coefficient) in coefficients.iter().enumerate() {
-        let source_frame = frame as isize + tap as isize - PRE_UPSAMPLE_CENTER;
+        let source_frame = frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
         if let Ok(source_frame) = usize::try_from(source_frame)
             && source_frame < frame_count
         {
@@ -177,13 +177,13 @@ pub(super) fn pre_upsample_coefficients(
 ) -> [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR] {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
     let mut coefficients = [[0.0; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
-    coefficients[0][PRE_UPSAMPLE_CENTER as usize] = 1.0;
+    coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
 
     for (i_phase, phase_coefficients) in coefficients.iter_mut().enumerate().take(factor).skip(1) {
         let fraction = i_phase as f32 / factor as f32;
         let mut normalization = 0.0_f32;
         for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
-            let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER) as f32;
+            let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f32;
             let sinc = (std::f32::consts::PI * distance).sin() / (std::f32::consts::PI * distance);
             let window = 0.5
                 * (1.0

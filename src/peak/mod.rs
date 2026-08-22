@@ -43,8 +43,7 @@ pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
 
 pub(super) const PRE_UPSAMPLE_TAPS: usize = 24;
 pub(super) const PRE_UPSAMPLE_CENTER: usize = 11;
-const MAX_PRE_UPSAMPLE_FACTOR: usize = 6;
-pub(super) type PreUpsampleCoefficients = [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
+pub(super) type PreUpsampleCoefficients = Box<[[f32; PRE_UPSAMPLE_TAPS]]>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InterpolationFactor {
@@ -52,68 +51,44 @@ pub(super) enum InterpolationFactor {
     Four,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PeakStrategy {
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum PeakConfig {
     SamplePeak,
     Interpolated(InterpolationFactor),
     PreUpsampled {
-        factor: usize,
         interpolation: InterpolationFactor,
+        coefficients: PreUpsampleCoefficients,
     },
 }
 
-impl PeakStrategy {
+impl PeakConfig {
+    pub(crate) fn new(sample_rate: u32, true_peak: bool) -> Result<Self, LimiterError> {
+        if true_peak {
+            Self::try_from_sample_rate_for_true_peak(sample_rate)
+        } else {
+            Ok(Self::SamplePeak)
+        }
+    }
+
     fn try_from_sample_rate_for_true_peak(sample_rate: u32) -> Result<Self, LimiterError> {
         match sample_rate {
-            8_000 => Ok(Self::PreUpsampled {
-                factor: 6,
-                interpolation: InterpolationFactor::Four,
-            }),
-            11_025 | 12_000 => Ok(Self::PreUpsampled {
-                factor: 4,
-                interpolation: InterpolationFactor::Four,
-            }),
-            16_000 => Ok(Self::PreUpsampled {
-                factor: 3,
-                interpolation: InterpolationFactor::Four,
-            }),
-            22_050 | 24_000 => Ok(Self::PreUpsampled {
-                factor: 2,
-                interpolation: InterpolationFactor::Four,
-            }),
-            32_000 => Ok(Self::PreUpsampled {
-                factor: 3,
-                interpolation: InterpolationFactor::Two,
-            }),
+            8_000 => Ok(Self::pre_upsampled(6, InterpolationFactor::Four)),
+            11_025 | 12_000 => Ok(Self::pre_upsampled(4, InterpolationFactor::Four)),
+            16_000 => Ok(Self::pre_upsampled(3, InterpolationFactor::Four)),
+            22_050 | 24_000 => Ok(Self::pre_upsampled(2, InterpolationFactor::Four)),
+            32_000 => Ok(Self::pre_upsampled(3, InterpolationFactor::Two)),
             44_100 | 48_000 => Ok(Self::Interpolated(InterpolationFactor::Four)),
             88_200 | 96_000 => Ok(Self::Interpolated(InterpolationFactor::Two)),
             176_400.. => Ok(Self::SamplePeak),
             _ => Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate)),
         }
     }
-}
 
-#[derive(Clone, Debug)]
-pub(crate) struct PeakConfig {
-    strategy: PeakStrategy,
-    pre_upsample_coefficients: Option<PreUpsampleCoefficients>,
-}
-
-impl PeakConfig {
-    pub(crate) fn new(sample_rate: u32, true_peak: bool) -> Result<Self, LimiterError> {
-        let strategy = if true_peak {
-            PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate)?
-        } else {
-            PeakStrategy::SamplePeak
-        };
-        let pre_upsample_coefficients = match strategy {
-            PeakStrategy::PreUpsampled { factor, .. } => Some(pre_upsample_coefficients(factor)),
-            _ => None,
-        };
-        Ok(Self {
-            strategy,
-            pre_upsample_coefficients,
-        })
+    fn pre_upsampled(factor: usize, interpolation: InterpolationFactor) -> Self {
+        Self::PreUpsampled {
+            interpolation,
+            coefficients: pre_upsample_coefficients(factor),
+        }
     }
 
     pub(crate) fn collect_frame_peaks(
@@ -127,13 +102,16 @@ impl PeakConfig {
             AudioLayout::Planar => planar::collect(audio, channels, self),
         }
     }
+}
 
-    pub(super) fn strategy(&self) -> PeakStrategy {
-        self.strategy
-    }
-
-    pub(super) fn pre_upsample_coefficients(&self) -> Option<&PreUpsampleCoefficients> {
-        self.pre_upsample_coefficients.as_ref()
+pub(super) fn pre_upsample_interior_bounds(frame_count: usize) -> (usize, usize) {
+    if frame_count < PRE_UPSAMPLE_TAPS {
+        (frame_count, frame_count)
+    } else {
+        (
+            PRE_UPSAMPLE_CENTER,
+            frame_count - (PRE_UPSAMPLE_TAPS - PRE_UPSAMPLE_CENTER - 1),
+        )
     }
 }
 
@@ -186,13 +164,13 @@ pub(super) fn pre_upsample_sample(
 /// exactly, while phase `p` reconstructs the sample at the fractional offset
 /// `p / factor`. Every interpolating phase is normalized to unity DC gain.
 ///
-/// Only the first `factor` entries in the returned array are populated.
+/// The returned bank contains exactly `factor` phases.
 pub(super) fn pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
-    let mut coefficients = [[0.0; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
+    let mut coefficients = vec![[0.0; PRE_UPSAMPLE_TAPS]; factor].into_boxed_slice();
     coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
 
-    for (i_phase, phase_coefficients) in coefficients.iter_mut().enumerate().take(factor).skip(1) {
+    for (i_phase, phase_coefficients) in coefficients.iter_mut().enumerate().skip(1) {
         let fraction = i_phase as f32 / factor as f32;
         let mut normalization = 0.0_f32;
         for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
@@ -429,11 +407,8 @@ mod tests {
             (32_000, 3, InterpolationFactor::Two),
         ] {
             assert_eq!(
-                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
-                Ok(PeakStrategy::PreUpsampled {
-                    factor,
-                    interpolation,
-                })
+                PeakConfig::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakConfig::pre_upsampled(factor, interpolation))
             );
         }
         for (sample_rate, interpolation) in [
@@ -443,19 +418,19 @@ mod tests {
             (96_000, InterpolationFactor::Two),
         ] {
             assert_eq!(
-                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
-                Ok(PeakStrategy::Interpolated(interpolation))
+                PeakConfig::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakConfig::Interpolated(interpolation))
             );
         }
         for sample_rate in [176_400, 192_000, u32::MAX] {
             assert_eq!(
-                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
-                Ok(PeakStrategy::SamplePeak)
+                PeakConfig::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakConfig::SamplePeak)
             );
         }
         for sample_rate in [1, 10_000, 47_999, 176_399] {
             assert_eq!(
-                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
+                PeakConfig::try_from_sample_rate_for_true_peak(sample_rate),
                 Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))
             );
         }
@@ -473,16 +448,15 @@ mod tests {
             (32_000, 3),
         ] {
             let config = PeakConfig::new(sample_rate, true).unwrap();
-            assert_eq!(
-                config.pre_upsample_coefficients(),
-                Some(&pre_upsample_coefficients(factor)),
-                "sample_rate={sample_rate}, factor={factor}"
-            );
+            let PeakConfig::PreUpsampled { coefficients, .. } = config else {
+                panic!("sample_rate={sample_rate} did not select pre-upsampling");
+            };
+            assert_eq!(coefficients, pre_upsample_coefficients(factor));
         }
 
         for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
             let config = PeakConfig::new(sample_rate, true).unwrap();
-            assert_eq!(config.pre_upsample_coefficients(), None);
+            assert!(!matches!(config, PeakConfig::PreUpsampled { .. }));
         }
     }
 

@@ -4,8 +4,8 @@ use crate::{LimiterError, layout::validate_layout};
 
 use super::{
     CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_ADDITIONAL_PHASES, InterpolationFactor,
-    PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, PeakStrategy, PreUpsampleCoefficients,
-    TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES, interpolated_peak_at_frame, pre_upsample_sample,
+    PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
+    interpolated_peak_at_frame, pre_upsample_interior_bounds, pre_upsample_sample,
     reduce_upsampled_peaks, validate_finite_samples,
 };
 
@@ -14,22 +14,20 @@ pub(super) fn collect(
     channels: usize,
     config: &PeakConfig,
 ) -> Result<Vec<f32>, LimiterError> {
-    match config.strategy() {
-        PeakStrategy::SamplePeak => collect_sample_peaks(audio, channels),
-        PeakStrategy::Interpolated(interpolation) => {
-            collect_interpolated_peaks(audio, channels, interpolation)
+    match config {
+        PeakConfig::SamplePeak => collect_sample_peaks(audio, channels),
+        PeakConfig::Interpolated(interpolation) => {
+            collect_interpolated_peaks(audio, channels, *interpolation)
         }
-        PeakStrategy::PreUpsampled {
-            factor,
+        PeakConfig::PreUpsampled {
             interpolation,
+            coefficients,
         } => {
             let frame_count = validate_layout(audio.len(), channels)?;
             validate_finite_samples(audio)?;
-            let coefficients = config
-                .pre_upsample_coefficients()
-                .expect("pre-upsampling requires precomputed coefficients");
-            let upsampled = pre_upsample(audio, channels, frame_count, factor, coefficients);
-            let upsampled_peaks = collect_interpolated_peaks(&upsampled, channels, interpolation)?;
+            let factor = coefficients.len();
+            let upsampled = pre_upsample(audio, channels, frame_count, coefficients);
+            let upsampled_peaks = collect_interpolated_peaks(&upsampled, channels, *interpolation)?;
             Ok(reduce_upsampled_peaks(&upsampled_peaks, factor))
         }
     }
@@ -90,14 +88,14 @@ fn collect_boundary_peaks(
     frames: Range<usize>,
     interpolation: InterpolationFactor,
 ) {
-    for frame in frames {
+    for i_frame in frames {
         let peak = interpolated_peak_at_frame(
             |source_frame| channel_audio[source_frame],
             channel_audio.len(),
-            frame,
+            i_frame,
             interpolation,
         );
-        frame_peaks[frame] = frame_peaks[frame].max(peak);
+        frame_peaks[i_frame] = frame_peaks[i_frame].max(peak);
     }
 }
 
@@ -153,20 +151,13 @@ fn pre_upsample(
     audio: &[f32],
     channels: usize,
     frame_count: usize,
-    factor: usize,
-    coefficients: &PreUpsampleCoefficients,
+    coefficients: &[[f32; PRE_UPSAMPLE_TAPS]],
 ) -> Vec<f32> {
+    let factor = coefficients.len();
     let upsampled_frame_count = frame_count * factor;
     let mut upsampled = vec![0.0; audio.len() * factor];
     let mut phase_output = vec![0.0; frame_count];
-    let (interior_start, interior_end) = if frame_count < PRE_UPSAMPLE_TAPS {
-        (frame_count, frame_count)
-    } else {
-        (
-            PRE_UPSAMPLE_CENTER,
-            frame_count - (PRE_UPSAMPLE_TAPS - PRE_UPSAMPLE_CENTER - 1),
-        )
-    };
+    let (interior_start, interior_end) = pre_upsample_interior_bounds(frame_count);
 
     for i_channel in 0..channels {
         let input_offset = i_channel * frame_count;
@@ -178,7 +169,7 @@ fn pre_upsample(
             output_frame[0] = sample;
         }
 
-        for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor).skip(1) {
+        for (i_phase, phase_coefficients) in coefficients.iter().enumerate().skip(1) {
             for (i_frame, output_sample) in phase_output[..interior_start].iter_mut().enumerate() {
                 *output_sample = pre_upsample_sample(
                     |source_frame| channel_audio[source_frame],
@@ -231,9 +222,9 @@ mod tests {
         audio: &[f32],
         channels: usize,
         frame_count: usize,
-        factor: usize,
-        coefficients: &PreUpsampleCoefficients,
+        coefficients: &[[f32; PRE_UPSAMPLE_TAPS]],
     ) -> Vec<f32> {
+        let factor = coefficients.len();
         let upsampled_frame_count = frame_count * factor;
         let mut upsampled = vec![0.0; audio.len() * factor];
         for i_channel in 0..channels {
@@ -242,11 +233,11 @@ mod tests {
             let channel_audio = &audio[input_offset..input_offset + frame_count];
             let channel_output =
                 &mut upsampled[output_offset..output_offset + upsampled_frame_count];
-            for frame in 0..frame_count {
-                for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor) {
-                    channel_output[frame * factor + i_phase] = pre_upsample_sample(
+            for i_frame in 0..frame_count {
+                for (i_phase, phase_coefficients) in coefficients.iter().enumerate() {
+                    channel_output[i_frame * factor + i_phase] = pre_upsample_sample(
                         |source_frame| channel_audio[source_frame],
-                        frame,
+                        i_frame,
                         frame_count,
                         phase_coefficients,
                     );
@@ -293,14 +284,8 @@ mod tests {
                 for factor in [2, 3, 4, 6] {
                     let coefficients = super::super::pre_upsample_coefficients(factor);
                     assert_eq!(
-                        pre_upsample(&audio, channels, frame_count, factor, &coefficients),
-                        pre_upsample_reference(
-                            &audio,
-                            channels,
-                            frame_count,
-                            factor,
-                            &coefficients,
-                        ),
+                        pre_upsample(&audio, channels, frame_count, &coefficients),
+                        pre_upsample_reference(&audio, channels, frame_count, &coefficients),
                         "channels={channels}, frame_count={frame_count}, factor={factor}"
                     );
                 }

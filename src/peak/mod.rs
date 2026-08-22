@@ -44,6 +44,7 @@ pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
 pub(super) const PRE_UPSAMPLE_TAPS: usize = 24;
 pub(super) const PRE_UPSAMPLE_CENTER: usize = 11;
 const MAX_PRE_UPSAMPLE_FACTOR: usize = 6;
+pub(super) type PreUpsampleCoefficients = [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InterpolationFactor {
@@ -61,64 +62,78 @@ pub(super) enum PeakStrategy {
     },
 }
 
-fn true_peak_config(sample_rate: u32) -> Option<PeakStrategy> {
-    match sample_rate {
-        8_000 => Some(PeakStrategy::PreUpsampled {
-            factor: 6,
-            interpolation: InterpolationFactor::Four,
-        }),
-        11_025 => Some(PeakStrategy::PreUpsampled {
-            factor: 4,
-            interpolation: InterpolationFactor::Four,
-        }),
-        12_000 => Some(PeakStrategy::PreUpsampled {
-            factor: 4,
-            interpolation: InterpolationFactor::Four,
-        }),
-        16_000 => Some(PeakStrategy::PreUpsampled {
-            factor: 3,
-            interpolation: InterpolationFactor::Four,
-        }),
-        22_050 => Some(PeakStrategy::PreUpsampled {
-            factor: 2,
-            interpolation: InterpolationFactor::Four,
-        }),
-        24_000 => Some(PeakStrategy::PreUpsampled {
-            factor: 2,
-            interpolation: InterpolationFactor::Four,
-        }),
-        32_000 => Some(PeakStrategy::PreUpsampled {
-            factor: 3,
-            interpolation: InterpolationFactor::Two,
-        }),
-        44_100 | 48_000 => Some(PeakStrategy::Interpolated(InterpolationFactor::Four)),
-        88_200 | 96_000 => Some(PeakStrategy::Interpolated(InterpolationFactor::Two)),
-        176_400.. => Some(PeakStrategy::SamplePeak),
-        _ => None,
+impl PeakStrategy {
+    fn try_from_sample_rate_for_true_peak(sample_rate: u32) -> Result<Self, LimiterError> {
+        match sample_rate {
+            8_000 => Ok(Self::PreUpsampled {
+                factor: 6,
+                interpolation: InterpolationFactor::Four,
+            }),
+            11_025 | 12_000 => Ok(Self::PreUpsampled {
+                factor: 4,
+                interpolation: InterpolationFactor::Four,
+            }),
+            16_000 => Ok(Self::PreUpsampled {
+                factor: 3,
+                interpolation: InterpolationFactor::Four,
+            }),
+            22_050 | 24_000 => Ok(Self::PreUpsampled {
+                factor: 2,
+                interpolation: InterpolationFactor::Four,
+            }),
+            32_000 => Ok(Self::PreUpsampled {
+                factor: 3,
+                interpolation: InterpolationFactor::Two,
+            }),
+            44_100 | 48_000 => Ok(Self::Interpolated(InterpolationFactor::Four)),
+            88_200 | 96_000 => Ok(Self::Interpolated(InterpolationFactor::Two)),
+            176_400.. => Ok(Self::SamplePeak),
+            _ => Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate)),
+        }
     }
 }
 
-pub(crate) fn supports_true_peak_sample_rate(sample_rate: u32) -> bool {
-    true_peak_config(sample_rate).is_some()
+#[derive(Clone, Debug)]
+pub(crate) struct PeakConfig {
+    strategy: PeakStrategy,
+    pre_upsample_coefficients: Option<PreUpsampleCoefficients>,
 }
 
-pub(crate) fn collect_frame_peaks(
-    audio: &[f32],
-    channels: usize,
-    sample_rate: u32,
-    true_peak: bool,
-    layout: AudioLayout,
-) -> Result<Vec<f32>, LimiterError> {
-    let strategy = if true_peak {
-        true_peak_config(sample_rate)
-            .ok_or(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))?
-    } else {
-        PeakStrategy::SamplePeak
-    };
+impl PeakConfig {
+    pub(crate) fn new(sample_rate: u32, true_peak: bool) -> Result<Self, LimiterError> {
+        let strategy = if true_peak {
+            PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate)?
+        } else {
+            PeakStrategy::SamplePeak
+        };
+        let pre_upsample_coefficients = match strategy {
+            PeakStrategy::PreUpsampled { factor, .. } => Some(pre_upsample_coefficients(factor)),
+            _ => None,
+        };
+        Ok(Self {
+            strategy,
+            pre_upsample_coefficients,
+        })
+    }
 
-    match layout {
-        AudioLayout::Interleaved => interleaved::collect(audio, channels, strategy),
-        AudioLayout::Planar => planar::collect(audio, channels, strategy),
+    pub(crate) fn collect_frame_peaks(
+        &self,
+        audio: &[f32],
+        channels: usize,
+        layout: AudioLayout,
+    ) -> Result<Vec<f32>, LimiterError> {
+        match layout {
+            AudioLayout::Interleaved => interleaved::collect(audio, channels, self),
+            AudioLayout::Planar => planar::collect(audio, channels, self),
+        }
+    }
+
+    pub(super) fn strategy(&self) -> PeakStrategy {
+        self.strategy
+    }
+
+    pub(super) fn pre_upsample_coefficients(&self) -> Option<&PreUpsampleCoefficients> {
+        self.pre_upsample_coefficients.as_ref()
     }
 }
 
@@ -172,9 +187,7 @@ pub(super) fn pre_upsample_sample(
 /// `p / factor`. Every interpolating phase is normalized to unity DC gain.
 ///
 /// Only the first `factor` entries in the returned array are populated.
-pub(super) fn pre_upsample_coefficients(
-    factor: usize,
-) -> [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR] {
+pub(super) fn pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
     let mut coefficients = [[0.0; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
     coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
@@ -247,7 +260,7 @@ mod tests {
         sample_rate: u32,
         layout: AudioLayout,
     ) -> Result<Vec<f32>, LimiterError> {
-        collect_frame_peaks(audio, channels, sample_rate, true, layout)
+        PeakConfig::new(sample_rate, true)?.collect_frame_peaks(audio, channels, layout)
     }
 
     fn scalar_peak(samples: &[f32; FIR_TAP_COUNT], phases: &[usize]) -> f32 {
@@ -416,8 +429,8 @@ mod tests {
             (32_000, 3, InterpolationFactor::Two),
         ] {
             assert_eq!(
-                true_peak_config(sample_rate),
-                Some(PeakStrategy::PreUpsampled {
+                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakStrategy::PreUpsampled {
                     factor,
                     interpolation,
                 })
@@ -430,18 +443,46 @@ mod tests {
             (96_000, InterpolationFactor::Two),
         ] {
             assert_eq!(
-                true_peak_config(sample_rate),
-                Some(PeakStrategy::Interpolated(interpolation))
+                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakStrategy::Interpolated(interpolation))
             );
         }
         for sample_rate in [176_400, 192_000, u32::MAX] {
             assert_eq!(
-                true_peak_config(sample_rate),
-                Some(PeakStrategy::SamplePeak)
+                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
+                Ok(PeakStrategy::SamplePeak)
             );
         }
         for sample_rate in [1, 10_000, 47_999, 176_399] {
-            assert_eq!(true_peak_config(sample_rate), None);
+            assert_eq!(
+                PeakStrategy::try_from_sample_rate_for_true_peak(sample_rate),
+                Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))
+            );
+        }
+    }
+
+    #[test]
+    fn pre_upsample_coefficients_are_precomputed_for_each_factor() {
+        for (sample_rate, factor) in [
+            (8_000, 6),
+            (11_025, 4),
+            (12_000, 4),
+            (16_000, 3),
+            (22_050, 2),
+            (24_000, 2),
+            (32_000, 3),
+        ] {
+            let config = PeakConfig::new(sample_rate, true).unwrap();
+            assert_eq!(
+                config.pre_upsample_coefficients(),
+                Some(&pre_upsample_coefficients(factor)),
+                "sample_rate={sample_rate}, factor={factor}"
+            );
+        }
+
+        for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
+            let config = PeakConfig::new(sample_rate, true).unwrap();
+            assert_eq!(config.pre_upsample_coefficients(), None);
         }
     }
 

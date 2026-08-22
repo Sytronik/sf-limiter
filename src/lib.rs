@@ -113,6 +113,7 @@ pub struct SFLimiter {
     threshold_dBFS: f64,
     threshold: f64,
     true_peak: bool,
+    peak_config: peak::PeakConfig,
     attack_samples: usize,
     hold_samples: usize,
     moving_minimum: MovingMinimum,
@@ -144,9 +145,7 @@ impl SFLimiter {
         if sample_rate == 0 {
             return Err(LimiterError::InvalidSampleRate);
         }
-        if true_peak && !peak::supports_true_peak_sample_rate(sample_rate) {
-            return Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate));
-        }
+        let peak_config = peak::PeakConfig::new(sample_rate, true_peak)?;
         if !threshold_dBFS.is_finite() || threshold_dBFS > 0.0 {
             return Err(LimiterError::InvalidThreshold(threshold_dBFS));
         }
@@ -172,6 +171,7 @@ impl SFLimiter {
             threshold_dBFS,
             threshold,
             true_peak,
+            peak_config,
             attack_samples,
             hold_samples,
             moving_minimum: MovingMinimum::new(total_hold_samples),
@@ -255,8 +255,9 @@ impl SFLimiter {
         channels: usize,
         layout: AudioLayout,
     ) -> Result<Vec<f32>, LimiterError> {
-        let frame_peaks =
-            peak::collect_frame_peaks(audio, channels, self.sample_rate, self.true_peak, layout)?;
+        let frame_peaks = self
+            .peak_config
+            .collect_frame_peaks(audio, channels, layout)?;
         let frame_gains = self.calculate_frame_gains(frame_peaks);
         layout.apply_frame_gains(audio, &frame_gains, channels, self.threshold as f32);
         Ok(frame_gains)

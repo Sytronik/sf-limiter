@@ -21,7 +21,7 @@ Pyrefly is installed as an assistive tool for developers while writing Python co
 
 ## Coding Style & Naming Conventions
 
-Use rustfmt defaults (four-space indentation) and keep the crate free of unsafe Rust, as enforced by `Cargo.toml`. Follow Rust conventions: `snake_case` functions/modules, `CamelCase` types, and descriptive error variants. Python uses four spaces, `snake_case`, type annotations, and Ruff formatting. Keep the audio core independent of Python-specific types; binding conversion and validation belong in `src/python.rs`.
+Use rustfmt defaults (four-space indentation) and keep the crate free of unsafe Rust, as enforced by `Cargo.toml`. Follow Rust conventions: `snake_case` functions/modules, `CamelCase` types, and descriptive error variants. Name index variables explicitly, such as `i_channel` for a channel index and `i_frame` for a frame index. Do not use `channel` or `frame` alone for indices, because those names can be mistaken for a channel of planar audio data or a frame of interleaved audio data. Python uses four spaces, `snake_case`, type annotations, and Ruff formatting. Keep the audio core independent of Python-specific types; binding conversion and validation belong in `src/python.rs`.
 
 ## Testing Guidelines
 
@@ -29,4 +29,4 @@ Add regression tests with every behavior change. Name Rust tests descriptively w
 
 ## Commit & Pull Request Guidelines
 
-Follow the existing history: short, lowercase, imperative summaries such as `add python type stub`. Keep each commit focused. Pull requests should explain the user-visible behavior, list the Rust and Python commands run, and call out API or packaging changes. Link relevant issues; include before/after output for numerical behavior changes. Update `README.md` and `sf_limiter.pyi` when public APIs change.
+Follow the existing history by using lowercase, imperative commit subjects such as `add python type stub`. When a commit contains substantial changes, use the commit message body to describe the details thoroughly. Keep each commit focused. Pull requests should explain the user-visible behavior, list the Rust and Python commands run, and call out API or packaging changes. Link relevant issues; include before/after output for numerical behavior changes. Update `README.md` and `sf_limiter.pyi` when public APIs change.

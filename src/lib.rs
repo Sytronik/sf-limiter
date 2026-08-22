@@ -8,6 +8,7 @@
 //! [“Designing a straightforward limiter”](https://signalsmith-audio.co.uk/writing/2022/limiter/).
 
 mod envelope;
+mod layout;
 mod peak;
 
 #[cfg(feature = "python")]
@@ -17,6 +18,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use envelope::{BoxStackFilter, ExponentialRelease, MovingMinimum};
+use layout::AudioLayout;
 
 /// Validation and input errors returned by [`SFLimiter`].
 #[derive(Clone, Debug, PartialEq)]
@@ -192,12 +194,7 @@ impl SFLimiter {
         audio: &[f32],
         channels: usize,
     ) -> Result<LimiterOutput, LimiterError> {
-        let mut output = audio.to_vec();
-        let frame_gains = self.process_interleaved_inplace(&mut output, channels)?;
-        Ok(LimiterOutput {
-            audio: output,
-            frame_gains,
-        })
+        self.process(audio, channels, AudioLayout::Interleaved)
     }
 
     /// Processes frame-interleaved audio in place and returns one gain per frame.
@@ -210,14 +207,7 @@ impl SFLimiter {
         audio: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        let frame_peaks = if self.true_peak {
-            peak::collect_true_peaks_from_interleaved(audio, channels, self.sample_rate)?
-        } else {
-            peak::collect_sample_peaks_from_interleaved(audio, channels)?
-        };
-        let frame_gains = self.calculate_frame_gains(frame_peaks);
-        apply_frame_gains_to_interleaved(audio, &frame_gains, channels, self.threshold as f32);
-        Ok(frame_gains)
+        self.process_inplace(audio, channels, AudioLayout::Interleaved)
     }
 
     /// Processes a copy of channel-planar audio.
@@ -229,12 +219,7 @@ impl SFLimiter {
         audio: &[f32],
         channels: usize,
     ) -> Result<LimiterOutput, LimiterError> {
-        let mut output = audio.to_vec();
-        let frame_gains = self.process_planar_inplace(&mut output, channels)?;
-        Ok(LimiterOutput {
-            audio: output,
-            frame_gains,
-        })
+        self.process(audio, channels, AudioLayout::Planar)
     }
 
     /// Processes channel-planar audio in place and returns one gain per frame.
@@ -247,13 +232,33 @@ impl SFLimiter {
         audio: &mut [f32],
         channels: usize,
     ) -> Result<Vec<f32>, LimiterError> {
-        let frame_peaks = if self.true_peak {
-            peak::collect_true_peaks_from_planar(audio, channels, self.sample_rate)?
-        } else {
-            peak::collect_sample_peaks_from_planar(audio, channels)?
-        };
+        self.process_inplace(audio, channels, AudioLayout::Planar)
+    }
+
+    fn process(
+        &mut self,
+        audio: &[f32],
+        channels: usize,
+        layout: AudioLayout,
+    ) -> Result<LimiterOutput, LimiterError> {
+        let mut output = audio.to_vec();
+        let frame_gains = self.process_inplace(&mut output, channels, layout)?;
+        Ok(LimiterOutput {
+            audio: output,
+            frame_gains,
+        })
+    }
+
+    fn process_inplace(
+        &mut self,
+        audio: &mut [f32],
+        channels: usize,
+        layout: AudioLayout,
+    ) -> Result<Vec<f32>, LimiterError> {
+        let frame_peaks =
+            peak::collect_frame_peaks(audio, channels, self.sample_rate, self.true_peak, layout)?;
         let frame_gains = self.calculate_frame_gains(frame_peaks);
-        apply_frame_gains_to_planar(audio, &frame_gains, self.threshold as f32);
+        layout.apply_frame_gains(audio, &frame_gains, channels, self.threshold as f32);
         Ok(frame_gains)
     }
 
@@ -368,44 +373,6 @@ fn validate_time(parameter: &'static str, value_ms: f64) -> Result<(), LimiterEr
 
 fn milliseconds_to_samples(sample_rate: u32, value_ms: f64) -> usize {
     (value_ms * sample_rate as f64 / 1000.0).round() as usize
-}
-
-fn validate_layout(sample_count: usize, channels: usize) -> Result<usize, LimiterError> {
-    if channels == 0 {
-        return Err(LimiterError::InvalidChannelCount);
-    }
-    if !sample_count.is_multiple_of(channels) {
-        return Err(LimiterError::InputNotFrameAligned {
-            sample_count,
-            channels,
-        });
-    }
-    Ok(sample_count / channels)
-}
-
-fn apply_frame_gains_to_interleaved(
-    audio: &mut [f32],
-    frame_gains: &[f32],
-    channels: usize,
-    threshold: f32,
-) {
-    for (frame, gain) in audio.chunks_exact_mut(channels).zip(frame_gains) {
-        for sample in frame {
-            *sample = (*sample * *gain).clamp(-threshold, threshold);
-        }
-    }
-}
-
-fn apply_frame_gains_to_planar(audio: &mut [f32], frame_gains: &[f32], threshold: f32) {
-    if frame_gains.is_empty() {
-        return;
-    }
-
-    for channel in audio.chunks_exact_mut(frame_gains.len()) {
-        for (sample, gain) in channel.iter_mut().zip(frame_gains) {
-            *sample = (*sample * *gain).clamp(-threshold, threshold);
-        }
-    }
 }
 
 #[cfg(test)]

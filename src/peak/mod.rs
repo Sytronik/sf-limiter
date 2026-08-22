@@ -1,13 +1,16 @@
 //! Sample-peak collection and ITU-R BS.1770-5 Annex 2 true-peak estimation.
 
-use crate::{LimiterError, validate_layout};
+mod interleaved;
+mod planar;
+
+use crate::{LimiterError, layout::AudioLayout};
 
 const FIR_PHASE_COUNT: usize = 4;
-const FIR_TAP_COUNT: usize = 12;
-const CENTER_TAP: usize = FIR_TAP_COUNT / 2;
-const TRAILING_BOUNDARY_FRAMES: usize = FIR_TAP_COUNT - CENTER_TAP - 1;
-const TWO_X_PHASES: [usize; 2] = [0, FIR_PHASE_COUNT / 2];
-const FOUR_X_ADDITIONAL_PHASES: [usize; 2] = [1, FIR_PHASE_COUNT - 1];
+pub(super) const FIR_TAP_COUNT: usize = 12;
+pub(super) const CENTER_TAP: usize = FIR_TAP_COUNT / 2;
+pub(super) const TRAILING_BOUNDARY_FRAMES: usize = FIR_TAP_COUNT - CENTER_TAP - 1;
+pub(super) const TWO_X_PHASES: [usize; 2] = [0, FIR_PHASE_COUNT / 2];
+pub(super) const FOUR_X_ADDITIONAL_PHASES: [usize; 2] = [1, FIR_PHASE_COUNT - 1];
 
 // The order-48, four-phase FIR interpolator published in BS.1770-5. Coefficients
 // are phase-major so the planar hot loop can convolve consecutive frames with
@@ -15,7 +18,7 @@ const FOUR_X_ADDITIONAL_PHASES: [usize; 2] = [1, FIR_PHASE_COUNT - 1];
 // representable as f32.
 #[allow(clippy::excessive_precision)]
 #[rustfmt::skip]
-const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
+pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
     [
          0.0017089843750,  0.0109863281250, -0.0196533203125,  0.0332031250000,
         -0.0594482421875,  0.1373291015625,  0.9721679687500, -0.1022949218750,
@@ -43,13 +46,13 @@ const PRE_UPSAMPLE_CENTER: isize = 11;
 const MAX_PRE_UPSAMPLE_FACTOR: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InterpolationFactor {
+pub(super) enum InterpolationFactor {
     Two,
     Four,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PeakStrategy {
+pub(super) enum PeakStrategy {
     SamplePeak,
     Interpolated(InterpolationFactor),
     PreUpsampled {
@@ -99,211 +102,27 @@ pub(crate) fn supports_true_peak_sample_rate(sample_rate: u32) -> bool {
     true_peak_config(sample_rate).is_some()
 }
 
-pub(crate) fn collect_true_peaks_from_interleaved(
+pub(crate) fn collect_frame_peaks(
     audio: &[f32],
     channels: usize,
     sample_rate: u32,
+    true_peak: bool,
+    layout: AudioLayout,
 ) -> Result<Vec<f32>, LimiterError> {
-    match true_peak_config(sample_rate)
-        .ok_or(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))?
-    {
-        PeakStrategy::SamplePeak => collect_sample_peaks_from_interleaved(audio, channels),
-        PeakStrategy::Interpolated(interpolation) => {
-            collect_interpolated_peaks_from_interleaved(audio, channels, interpolation)
-        }
-        PeakStrategy::PreUpsampled {
-            factor,
-            interpolation,
-        } => {
-            let frame_count = validate_layout(audio.len(), channels)?;
-            validate_finite_samples(audio)?;
-            let upsampled = pre_upsample_interleaved(audio, channels, frame_count, factor);
-            let upsampled_peaks =
-                collect_interpolated_peaks_from_interleaved(&upsampled, channels, interpolation)?;
-            Ok(reduce_upsampled_peaks(&upsampled_peaks, factor))
-        }
+    let strategy = if true_peak {
+        true_peak_config(sample_rate)
+            .ok_or(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))?
+    } else {
+        PeakStrategy::SamplePeak
+    };
+
+    match layout {
+        AudioLayout::Interleaved => interleaved::collect(audio, channels, strategy),
+        AudioLayout::Planar => planar::collect(audio, channels, strategy),
     }
 }
 
-fn collect_interpolated_peaks_from_interleaved(
-    audio: &[f32],
-    channels: usize,
-    interpolation: InterpolationFactor,
-) -> Result<Vec<f32>, LimiterError> {
-    let mut frame_peaks = collect_sample_peaks_from_interleaved(audio, channels)?;
-    let frame_count = frame_peaks.len();
-    for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
-        for channel in 0..channels {
-            let peak = interpolated_peak_at_frame(
-                |source_frame| audio[source_frame * channels + channel],
-                frame_count,
-                i_frame,
-                interpolation,
-            );
-            *frame_peak = frame_peak.max(peak);
-        }
-    }
-    Ok(frame_peaks)
-}
-
-pub(crate) fn collect_true_peaks_from_planar(
-    audio: &[f32],
-    channels: usize,
-    sample_rate: u32,
-) -> Result<Vec<f32>, LimiterError> {
-    match true_peak_config(sample_rate)
-        .ok_or(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))?
-    {
-        PeakStrategy::SamplePeak => collect_sample_peaks_from_planar(audio, channels),
-        PeakStrategy::Interpolated(interpolation) => {
-            collect_interpolated_peaks_from_planar(audio, channels, interpolation)
-        }
-        PeakStrategy::PreUpsampled {
-            factor,
-            interpolation,
-        } => {
-            let frame_count = validate_layout(audio.len(), channels)?;
-            validate_finite_samples(audio)?;
-            let upsampled = pre_upsample_planar(audio, channels, frame_count, factor);
-            let upsampled_peaks =
-                collect_interpolated_peaks_from_planar(&upsampled, channels, interpolation)?;
-            Ok(reduce_upsampled_peaks(&upsampled_peaks, factor))
-        }
-    }
-}
-
-fn collect_interpolated_peaks_from_planar(
-    audio: &[f32],
-    channels: usize,
-    interpolation: InterpolationFactor,
-) -> Result<Vec<f32>, LimiterError> {
-    let mut frame_peaks = collect_sample_peaks_from_planar(audio, channels)?;
-    let frame_count = frame_peaks.len();
-    for i_channel in 0..channels {
-        let channel_offset = i_channel * frame_count;
-        let channel_audio = &audio[channel_offset..channel_offset + frame_count];
-
-        if frame_count < FIR_TAP_COUNT {
-            collect_planar_boundary_peaks(
-                channel_audio,
-                &mut frame_peaks,
-                0..frame_count,
-                interpolation,
-            );
-            continue;
-        }
-
-        // The vectorizable path requires a complete FIR window; edge frames use
-        // the scalar path so out-of-range taps can be treated as zero.
-        collect_planar_boundary_peaks(
-            channel_audio,
-            &mut frame_peaks,
-            0..CENTER_TAP,
-            interpolation,
-        );
-        let trailing_start = frame_count - TRAILING_BOUNDARY_FRAMES;
-        collect_planar_boundary_peaks(
-            channel_audio,
-            &mut frame_peaks,
-            trailing_start..frame_count,
-            interpolation,
-        );
-
-        for phase in TWO_X_PHASES {
-            convolve_planar_phase(channel_audio, &mut frame_peaks, &COEFFICIENTS[phase]);
-        }
-        if interpolation == InterpolationFactor::Four {
-            for phase in FOUR_X_ADDITIONAL_PHASES {
-                convolve_planar_phase(channel_audio, &mut frame_peaks, &COEFFICIENTS[phase]);
-            }
-        }
-    }
-    Ok(frame_peaks)
-}
-
-fn collect_planar_boundary_peaks(
-    channel_audio: &[f32],
-    frame_peaks: &mut [f32],
-    frames: std::ops::Range<usize>,
-    interpolation: InterpolationFactor,
-) {
-    for frame in frames {
-        let peak = interpolated_peak_at_frame(
-            |source_frame| channel_audio[source_frame],
-            channel_audio.len(),
-            frame,
-            interpolation,
-        );
-        frame_peaks[frame] = frame_peaks[frame].max(peak);
-    }
-}
-
-// Keeping the tap expression fixed and making consecutive frames independent
-// lets LLVM vectorize this loop across frames without relaxed floating-point
-// reductions or architecture-specific intrinsics.
-#[inline(never)]
-fn convolve_planar_phase(
-    channel_audio: &[f32],
-    frame_peaks: &mut [f32],
-    coefficients: &[f32; FIR_TAP_COUNT],
-) {
-    debug_assert_eq!(channel_audio.len(), frame_peaks.len());
-    debug_assert!(channel_audio.len() >= FIR_TAP_COUNT);
-
-    let interior_len = channel_audio.len() - (FIR_TAP_COUNT - 1);
-    for index in 0..interior_len {
-        let sum = channel_audio[index] * coefficients[11]
-            + channel_audio[index + 1] * coefficients[10]
-            + channel_audio[index + 2] * coefficients[9]
-            + channel_audio[index + 3] * coefficients[8]
-            + channel_audio[index + 4] * coefficients[7]
-            + channel_audio[index + 5] * coefficients[6]
-            + channel_audio[index + 6] * coefficients[5]
-            + channel_audio[index + 7] * coefficients[4]
-            + channel_audio[index + 8] * coefficients[3]
-            + channel_audio[index + 9] * coefficients[2]
-            + channel_audio[index + 10] * coefficients[1]
-            + channel_audio[index + 11] * coefficients[0];
-        let frame_peak = &mut frame_peaks[index + CENTER_TAP];
-        *frame_peak = frame_peak.max(sum.abs());
-    }
-}
-
-pub(crate) fn collect_sample_peaks_from_interleaved(
-    audio: &[f32],
-    channels: usize,
-) -> Result<Vec<f32>, LimiterError> {
-    let frame_count = validate_layout(audio.len(), channels)?;
-    validate_finite_samples(audio)?;
-
-    let mut frame_peaks = Vec::with_capacity(frame_count);
-    for frame in audio.chunks_exact(channels) {
-        frame_peaks.push(frame.iter().map(|sample| sample.abs()).fold(0.0, f32::max));
-    }
-    Ok(frame_peaks)
-}
-
-pub(crate) fn collect_sample_peaks_from_planar(
-    audio: &[f32],
-    channels: usize,
-) -> Result<Vec<f32>, LimiterError> {
-    let frame_count = validate_layout(audio.len(), channels)?;
-    validate_finite_samples(audio)?;
-
-    let mut frame_peaks = vec![0.0_f32; frame_count];
-    if frame_count == 0 {
-        return Ok(frame_peaks);
-    }
-
-    for channel in audio.chunks_exact(frame_count) {
-        for (peak, sample) in frame_peaks.iter_mut().zip(channel) {
-            *peak = peak.max(sample.abs());
-        }
-    }
-    Ok(frame_peaks)
-}
-
-fn interpolated_peak_at_frame(
+pub(super) fn interpolated_peak_at_frame(
     mut sample_at: impl FnMut(usize) -> f32,
     frame_count: usize,
     frame: usize,
@@ -327,59 +146,7 @@ fn interpolated_peak_at_frame(
     }
 }
 
-fn pre_upsample_interleaved(
-    audio: &[f32],
-    channels: usize,
-    frame_count: usize,
-    factor: usize,
-) -> Vec<f32> {
-    let coefficients = pre_upsample_coefficients(factor);
-    let mut upsampled = vec![0.0; audio.len() * factor];
-    for i_channel in 0..channels {
-        for i_frame in 0..frame_count {
-            for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor) {
-                let output_frame = i_frame * factor + i_phase;
-                upsampled[output_frame * channels + i_channel] = pre_upsample_sample(
-                    |source_frame| audio[source_frame * channels + i_channel],
-                    i_frame,
-                    frame_count,
-                    phase_coefficients,
-                );
-            }
-        }
-    }
-    upsampled
-}
-
-fn pre_upsample_planar(
-    audio: &[f32],
-    channels: usize,
-    frame_count: usize,
-    factor: usize,
-) -> Vec<f32> {
-    let coefficients = pre_upsample_coefficients(factor);
-    let upsampled_frame_count = frame_count * factor;
-    let mut upsampled = vec![0.0; audio.len() * factor];
-    for i_channel in 0..channels {
-        let input_offset = i_channel * frame_count;
-        let output_offset = i_channel * upsampled_frame_count;
-        let channel_audio = &audio[input_offset..input_offset + frame_count];
-        let channel_output = &mut upsampled[output_offset..output_offset + upsampled_frame_count];
-        for frame in 0..frame_count {
-            for (i_phase, phase_coefficients) in coefficients.iter().enumerate().take(factor) {
-                channel_output[frame * factor + i_phase] = pre_upsample_sample(
-                    |source_frame| channel_audio[source_frame],
-                    frame,
-                    frame_count,
-                    phase_coefficients,
-                );
-            }
-        }
-    }
-    upsampled
-}
-
-fn pre_upsample_sample(
+pub(super) fn pre_upsample_sample(
     mut sample: impl FnMut(usize) -> f32,
     frame: usize,
     frame_count: usize,
@@ -405,7 +172,9 @@ fn pre_upsample_sample(
 /// `p / factor`. Every interpolating phase is normalized to unity DC gain.
 ///
 /// Only the first `factor` entries in the returned array are populated.
-fn pre_upsample_coefficients(factor: usize) -> [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR] {
+pub(super) fn pre_upsample_coefficients(
+    factor: usize,
+) -> [[f32; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR] {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
     let mut coefficients = [[0.0; PRE_UPSAMPLE_TAPS]; MAX_PRE_UPSAMPLE_FACTOR];
     coefficients[0][PRE_UPSAMPLE_CENTER as usize] = 1.0;
@@ -430,7 +199,7 @@ fn pre_upsample_coefficients(factor: usize) -> [[f32; PRE_UPSAMPLE_TAPS]; MAX_PR
     coefficients
 }
 
-fn reduce_upsampled_peaks(upsampled_peaks: &[f32], factor: usize) -> Vec<f32> {
+pub(super) fn reduce_upsampled_peaks(upsampled_peaks: &[f32], factor: usize) -> Vec<f32> {
     upsampled_peaks
         .chunks_exact(factor)
         .map(|peaks| peaks.iter().copied().fold(0.0, f32::max))
@@ -460,7 +229,7 @@ fn convolve_scalar(samples: &[f32; FIR_TAP_COUNT], coefficients: &[f32; FIR_TAP_
         .sum()
 }
 
-fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError> {
+pub(super) fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError> {
     if let Some(index) = audio.iter().position(|sample| !sample.is_finite()) {
         Err(LimiterError::NonFiniteSample { index })
     } else {
@@ -471,6 +240,15 @@ fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn collect_true_peaks(
+        audio: &[f32],
+        channels: usize,
+        sample_rate: u32,
+        layout: AudioLayout,
+    ) -> Result<Vec<f32>, LimiterError> {
+        collect_frame_peaks(audio, channels, sample_rate, true, layout)
+    }
 
     fn scalar_peak(samples: &[f32; FIR_TAP_COUNT], phases: &[usize]) -> f32 {
         phases
@@ -554,25 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn planar_phase_convolution_uses_the_same_fir_order() {
-        let audio: Vec<_> = (0..32)
-            .map(|index| ((index as f64 * 0.731).sin() * 1.7) as f32)
-            .collect();
-        let mut peaks = vec![0.0; audio.len()];
-
-        convolve_planar_phase(&audio, &mut peaks, &COEFFICIENTS[1]);
-
-        for index in 0..audio.len() - (FIR_TAP_COUNT - 1) {
-            let samples: [f32; FIR_TAP_COUNT] =
-                audio[index..index + FIR_TAP_COUNT].try_into().unwrap();
-            assert_eq!(
-                peaks[index + CENTER_TAP],
-                convolve_scalar(&samples, &COEFFICIENTS[1]).abs()
-            );
-        }
-    }
-
-    #[test]
     fn two_phase_convolution_detects_a_quarter_rate_inter_sample_peak() {
         let audio: Vec<_> = (0..128)
             .map(|index| {
@@ -582,7 +341,7 @@ mod tests {
             })
             .collect();
 
-        let peaks = collect_true_peaks_from_interleaved(&audio, 1, 96_000).unwrap();
+        let peaks = collect_true_peaks(&audio, 1, 96_000, AudioLayout::Interleaved).unwrap();
         let interior_peak = peaks[24..audio.len() - 24]
             .iter()
             .copied()
@@ -617,8 +376,10 @@ mod tests {
             176_400, 192_000,
         ] {
             let interleaved =
-                collect_true_peaks_from_interleaved(&interleaved_audio, 2, sample_rate).unwrap();
-            let planar = collect_true_peaks_from_planar(&planar_audio, 2, sample_rate).unwrap();
+                collect_true_peaks(&interleaved_audio, 2, sample_rate, AudioLayout::Interleaved)
+                    .unwrap();
+            let planar =
+                collect_true_peaks(&planar_audio, 2, sample_rate, AudioLayout::Planar).unwrap();
             for (interleaved, planar) in interleaved.iter().zip(planar) {
                 assert!((interleaved - planar).abs() <= 2.0 * f32::EPSILON);
             }
@@ -632,7 +393,8 @@ mod tests {
             8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
             176_400, 192_000,
         ] {
-            let peaks = collect_true_peaks_from_interleaved(&audio, 1, sample_rate).unwrap();
+            let peaks =
+                collect_true_peaks(&audio, 1, sample_rate, AudioLayout::Interleaved).unwrap();
             for peak in &peaks[24..audio.len() - 24] {
                 assert!(
                     (*peak - 1.0).abs() < 0.002,
@@ -684,23 +446,13 @@ mod tests {
     }
 
     #[test]
-    fn pre_upsampling_preserves_original_samples() {
-        let audio = [0.25, -0.5, 0.75, -1.0];
-        for factor in [2, 3, 4, 6] {
-            let upsampled = pre_upsample_interleaved(&audio, 1, audio.len(), factor);
-            let original_phases: Vec<_> = upsampled.iter().step_by(factor).copied().collect();
-            assert_eq!(original_phases, audio);
-        }
-    }
-
-    #[test]
     fn unsupported_true_peak_sample_rate_is_rejected() {
         assert_eq!(
-            collect_true_peaks_from_interleaved(&[0.0], 1, 176_399).unwrap_err(),
+            collect_true_peaks(&[0.0], 1, 176_399, AudioLayout::Interleaved).unwrap_err(),
             LimiterError::UnsupportedTruePeakSampleRate(176_399)
         );
         assert_eq!(
-            collect_true_peaks_from_planar(&[0.0], 1, 10_000).unwrap_err(),
+            collect_true_peaks(&[0.0], 1, 10_000, AudioLayout::Planar).unwrap_err(),
             LimiterError::UnsupportedTruePeakSampleRate(10_000)
         );
     }
@@ -715,7 +467,7 @@ mod tests {
                     * 1.1
             })
             .collect();
-        let peaks = collect_true_peaks_from_interleaved(&audio, 1, 48_000).unwrap();
+        let peaks = collect_true_peaks(&audio, 1, 48_000, AudioLayout::Interleaved).unwrap();
         assert!(audio.iter().all(|sample| sample.abs() < 1.0));
         assert!(
             peaks[6..audio.len() - 6]

@@ -218,6 +218,29 @@ mod tests {
     use super::*;
     use crate::peak::convolve_scalar;
 
+    fn collect_interpolated_peaks_scalar_reference(
+        audio: &[f32],
+        channels: usize,
+        interpolation: InterpolationFactor,
+    ) -> Vec<f32> {
+        let mut frame_peaks = collect_sample_peaks(audio, channels).unwrap();
+        let frame_count = frame_peaks.len();
+        for i_channel in 0..channels {
+            let channel_offset = i_channel * frame_count;
+            let channel_audio = &audio[channel_offset..channel_offset + frame_count];
+            for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
+                let peak = interpolated_peak_at_frame(
+                    |source_frame| channel_audio[source_frame],
+                    frame_count,
+                    i_frame,
+                    interpolation,
+                );
+                *frame_peak = frame_peak.max(peak);
+            }
+        }
+        frame_peaks
+    }
+
     fn pre_upsample_reference(
         audio: &[f32],
         channels: usize,
@@ -263,6 +286,41 @@ mod tests {
                 peaks[index + CENTER_TAP],
                 convolve_scalar(&samples, &COEFFICIENTS[1]).abs()
             );
+        }
+    }
+
+    #[test]
+    fn pre_upsampling_preserves_original_samples() {
+        let audio = [0.25, -0.5, 0.75, -1.0];
+        for factor in [2, 3, 4, 6] {
+            let coefficients = super::super::pre_upsample_coefficients(factor);
+            let upsampled = pre_upsample(&audio, 1, audio.len(), &coefficients);
+            let original_phases: Vec<_> = upsampled.iter().step_by(factor).copied().collect();
+            assert_eq!(original_phases, audio);
+        }
+    }
+
+    #[test]
+    fn vectorizable_interpolation_matches_scalar_reference() {
+        for channels in [1, 2, 3, 4, 5, 8] {
+            for frame_count in [0, 1, 11, 12, 13, 257] {
+                let audio: Vec<_> = (0..frame_count * channels)
+                    .map(|i_sample| {
+                        ((i_sample as f64 * 0.731).sin() + (i_sample as f64 * 0.193).cos()) as f32
+                    })
+                    .collect();
+                for interpolation in [InterpolationFactor::Two, InterpolationFactor::Four] {
+                    assert_eq!(
+                        collect_interpolated_peaks(&audio, channels, interpolation).unwrap(),
+                        collect_interpolated_peaks_scalar_reference(
+                            &audio,
+                            channels,
+                            interpolation,
+                        ),
+                        "channels={channels}, frame_count={frame_count}, interpolation={interpolation:?}"
+                    );
+                }
+            }
         }
     }
 

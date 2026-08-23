@@ -264,6 +264,7 @@ fn pre_upsample_boundary_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peak::convolve_scalar;
 
     fn collect_interpolated_peaks_scalar_reference(
         audio: &[f32],
@@ -292,7 +293,45 @@ mod tests {
         frame_count: usize,
         coefficients: &[[f32; PRE_UPSAMPLE_TAPS]],
     ) -> Vec<f32> {
-        pre_upsample_scalar(audio, channels, frame_count, coefficients)
+        let factor = coefficients.len();
+        let mut upsampled = vec![0.0; audio.len() * factor];
+        for i_frame in 0..frame_count {
+            for i_channel in 0..channels {
+                for (i_phase, phase_coefficients) in coefficients.iter().enumerate() {
+                    upsampled[(i_frame * factor + i_phase) * channels + i_channel] =
+                        pre_upsample_sample(
+                            |source_frame| audio[source_frame * channels + i_channel],
+                            i_frame,
+                            frame_count,
+                            phase_coefficients,
+                        );
+                }
+            }
+        }
+        upsampled
+    }
+
+    #[test]
+    fn phase_convolution_uses_the_same_fir_order() {
+        let channels = 4;
+        let frame_count = 32;
+        let audio: Vec<_> = (0..frame_count * channels)
+            .map(|i_sample| ((i_sample as f64 * 0.731).sin() * 1.7) as f32)
+            .collect();
+        let mut peaks = vec![0.0; frame_count];
+
+        convolve_phase(&audio, &mut peaks, channels, &COEFFICIENTS[1]);
+
+        for i_window in 0..frame_count - (FIR_TAP_COUNT - 1) {
+            let expected = (0..channels)
+                .map(|i_channel| {
+                    let samples =
+                        std::array::from_fn(|tap| audio[(i_window + tap) * channels + i_channel]);
+                    convolve_scalar(&samples, &COEFFICIENTS[1]).abs()
+                })
+                .fold(0.0, f32::max);
+            assert_eq!(peaks[i_window + CENTER_TAP], expected);
+        }
     }
 
     #[test]

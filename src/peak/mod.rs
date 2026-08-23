@@ -343,36 +343,44 @@ mod tests {
     }
 
     #[test]
-    fn planar_convolution_matches_interleaved_convolution() {
-        let first_channel: Vec<_> = (0..257)
-            .map(|index| {
-                (((index as f64 * 0.731).sin() * 1.7) + ((index as f64 * 0.193).cos() * 0.4)) as f32
-            })
-            .collect();
-        let second_channel: Vec<_> = (0..257)
-            .map(|index| {
-                (((index as f64 * 0.417).cos() * 0.9) - ((index as f64 * 0.137).sin() * 0.6)) as f32
-            })
-            .collect();
-        let interleaved_audio: Vec<_> = first_channel
-            .iter()
-            .zip(&second_channel)
-            .flat_map(|(&first, &second)| [first, second])
-            .collect();
-        let mut planar_audio = first_channel;
-        planar_audio.extend(second_channel);
+    fn planar_peak_collection_matches_interleaved_peak_collection() {
+        let frame_count = 257;
+        for channels in [1, 2, 3, 4, 5, 8] {
+            let planar_audio: Vec<_> = (0..frame_count * channels)
+                .map(|i_sample| {
+                    (((i_sample as f64 * 0.731).sin() * 1.7)
+                        + ((i_sample as f64 * 0.193).cos() * 0.4)) as f32
+                })
+                .collect();
+            let planar_samples = &planar_audio;
+            let interleaved_audio: Vec<_> = (0..frame_count)
+                .flat_map(|i_frame| {
+                    (0..channels)
+                        .map(move |i_channel| planar_samples[i_channel * frame_count + i_frame])
+                })
+                .collect();
 
-        for sample_rate in [
-            8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
-            176_400, 192_000,
-        ] {
-            let interleaved =
-                collect_true_peaks(&interleaved_audio, 2, sample_rate, AudioLayout::Interleaved)
-                    .unwrap();
-            let planar =
-                collect_true_peaks(&planar_audio, 2, sample_rate, AudioLayout::Planar).unwrap();
-            for (interleaved, planar) in interleaved.iter().zip(planar) {
-                assert!((interleaved - planar).abs() <= 2.0 * f32::EPSILON);
+            for sample_rate in [
+                8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200,
+                96_000, 176_400, 192_000,
+            ] {
+                let interleaved = collect_true_peaks(
+                    &interleaved_audio,
+                    channels,
+                    sample_rate,
+                    AudioLayout::Interleaved,
+                )
+                .unwrap();
+                let planar =
+                    collect_true_peaks(&planar_audio, channels, sample_rate, AudioLayout::Planar)
+                        .unwrap();
+                assert_eq!(interleaved.len(), planar.len());
+                for (interleaved_peak, planar_peak) in interleaved.iter().zip(planar) {
+                    assert!(
+                        (interleaved_peak - planar_peak).abs() <= 2.0 * f32::EPSILON,
+                        "channels={channels}, sample_rate={sample_rate}, interleaved={interleaved_peak}, planar={planar_peak}"
+                    );
+                }
             }
         }
     }

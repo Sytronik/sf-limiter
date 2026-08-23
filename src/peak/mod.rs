@@ -124,17 +124,17 @@ pub(super) fn calc_pre_upsample_interior_bounds(frame_count: usize) -> (usize, u
 pub(super) fn calc_interpolated_peak_at_frame(
     mut sample_at: impl FnMut(usize) -> f32,
     frame_count: usize,
-    frame: usize,
+    i_frame: usize,
     interpolation: InterpolationFactor,
 ) -> f32 {
     // An even-length FIR window spans six frames before this frame and five after it.
     // Samples beyond either signal boundary are zero-padded.
     let samples: [f32; FIR_TAP_COUNT] = std::array::from_fn(|tap| {
-        let source_frame = frame as isize + tap as isize - CENTER_TAP as isize;
-        if let Ok(source_frame) = usize::try_from(source_frame)
-            && source_frame < frame_count
+        let i_src_frame = i_frame as isize + tap as isize - CENTER_TAP as isize;
+        if let Ok(i_src_frame) = usize::try_from(i_src_frame)
+            && i_src_frame < frame_count
         {
-            sample_at(source_frame)
+            sample_at(i_src_frame)
         } else {
             0.0
         }
@@ -147,42 +147,43 @@ pub(super) fn calc_interpolated_peak_at_frame(
 
 #[cfg(test)]
 pub(super) fn pre_upsample_sample(
-    mut sample: impl FnMut(usize) -> f32,
-    frame: usize,
+    mut sample_at: impl FnMut(usize) -> f32,
+    i_frame: usize,
     frame_count: usize,
     coefficients: &[f32; PRE_UPSAMPLE_TAPS],
 ) -> f32 {
     let mut sum = 0.0_f32;
     for (tap, coefficient) in coefficients.iter().enumerate() {
-        let source_frame = frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
-        if let Ok(source_frame) = usize::try_from(source_frame)
-            && source_frame < frame_count
+        let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
+        if let Ok(i_src_frame) = usize::try_from(i_src_frame)
+            && i_src_frame < frame_count
         {
-            sum += sample(source_frame) * coefficient;
+            sum += sample_at(i_src_frame) * coefficient;
         }
     }
     sum
 }
 
 pub(super) fn pre_upsample_symmetric_sample(
-    mut sample: impl FnMut(usize) -> f32,
-    frame: usize,
+    mut sample_at: impl FnMut(usize) -> f32,
+    i_frame: usize,
     frame_count: usize,
     coefficients: &[f32; PRE_UPSAMPLE_TAPS],
 ) -> f32 {
     let mut sum = 0.0_f32;
     for (tap, &coefficient) in coefficients.iter().take(PRE_UPSAMPLE_TAPS / 2).enumerate() {
         let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let input = pre_upsample_source_sample(&mut sample, frame, frame_count, tap);
-        let mirror_input = pre_upsample_source_sample(&mut sample, frame, frame_count, mirror_tap);
+        let input = pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, tap);
+        let mirror_input =
+            pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, mirror_tap);
         sum += (input + mirror_input) * coefficient;
     }
     sum
 }
 
 pub(super) fn pre_upsample_mirrored_samples(
-    mut sample: impl FnMut(usize) -> f32,
-    frame: usize,
+    mut sample_at: impl FnMut(usize) -> f32,
+    i_frame: usize,
     frame_count: usize,
     coefficients: &[f32; PRE_UPSAMPLE_TAPS],
 ) -> (f32, f32) {
@@ -190,8 +191,9 @@ pub(super) fn pre_upsample_mirrored_samples(
     let mut mirror_sum = 0.0_f32;
     for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
         let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let input = pre_upsample_source_sample(&mut sample, frame, frame_count, tap);
-        let mirror_input = pre_upsample_source_sample(&mut sample, frame, frame_count, mirror_tap);
+        let input = pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, tap);
+        let mirror_input =
+            pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, mirror_tap);
         let coefficient = coefficients[tap];
         let mirror_coefficient = coefficients[mirror_tap];
         let common = (input + mirror_input) * ((coefficient + mirror_coefficient) * 0.5);
@@ -203,16 +205,16 @@ pub(super) fn pre_upsample_mirrored_samples(
 }
 
 fn pre_upsample_source_sample(
-    sample: &mut impl FnMut(usize) -> f32,
-    frame: usize,
+    sample_at: &mut impl FnMut(usize) -> f32,
+    i_frame: usize,
     frame_count: usize,
     tap: usize,
 ) -> f32 {
-    let source_frame = frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
-    if let Ok(source_frame) = usize::try_from(source_frame)
-        && source_frame < frame_count
+    let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
+    if let Ok(i_src_frame) = usize::try_from(i_src_frame)
+        && i_src_frame < frame_count
     {
-        sample(source_frame)
+        sample_at(i_src_frame)
     } else {
         0.0
     }
@@ -400,11 +402,11 @@ mod tests {
     fn interpolated_peak_zero_pads_both_boundaries() {
         let audio = [0.25, -0.5, 0.75, -1.0];
 
-        let mut accessed_frames = Vec::new();
+        let mut accessed_frame_indices = Vec::new();
         let leading_peak = calc_interpolated_peak_at_frame(
-            |source_frame| {
-                accessed_frames.push(source_frame);
-                audio[source_frame]
+            |i_src_frame| {
+                accessed_frame_indices.push(i_src_frame);
+                audio[i_src_frame]
             },
             audio.len(),
             0,
@@ -413,13 +415,13 @@ mod tests {
         let mut leading_window = [0.0; FIR_TAP_COUNT];
         leading_window[CENTER_TAP..CENTER_TAP + audio.len()].copy_from_slice(&audio);
         assert_eq!(leading_peak, scalar_peak(&leading_window, &[0, 1, 2, 3]));
-        assert_eq!(accessed_frames, [0, 1, 2, 3]);
+        assert_eq!(accessed_frame_indices, [0, 1, 2, 3]);
 
-        accessed_frames.clear();
+        accessed_frame_indices.clear();
         let trailing_peak = calc_interpolated_peak_at_frame(
-            |source_frame| {
-                accessed_frames.push(source_frame);
-                audio[source_frame]
+            |i_src_frame| {
+                accessed_frame_indices.push(i_src_frame);
+                audio[i_src_frame]
             },
             audio.len(),
             audio.len() - 1,
@@ -429,7 +431,7 @@ mod tests {
         let trailing_start = CENTER_TAP + 1 - audio.len();
         trailing_window[trailing_start..trailing_start + audio.len()].copy_from_slice(&audio);
         assert_eq!(trailing_peak, scalar_peak(&trailing_window, &[0, 1, 2, 3]));
-        assert_eq!(accessed_frames, [0, 1, 2, 3]);
+        assert_eq!(accessed_frame_indices, [0, 1, 2, 3]);
     }
 
     #[test]

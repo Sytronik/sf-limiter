@@ -43,40 +43,30 @@ fn collect_interpolated_peaks(
     let frame_count = frame_peaks.len();
     for i_channel in 0..channels {
         let channel_offset = i_channel * frame_count;
-        let channel_audio = &audio[channel_offset..channel_offset + frame_count];
+        let channel = &audio[channel_offset..channel_offset + frame_count];
 
         if frame_count < FIR_TAP_COUNT {
-            collect_boundary_peaks(
-                channel_audio,
-                &mut frame_peaks,
-                0..frame_count,
-                interpolation,
-            );
+            collect_boundary_peaks(channel, &mut frame_peaks, 0..frame_count, interpolation);
             continue;
         }
 
         // The vectorizable path requires a complete FIR window; edge frames use
         // the scalar path so out-of-range taps can be treated as zero.
-        collect_boundary_peaks(
-            channel_audio,
-            &mut frame_peaks,
-            0..CENTER_TAP,
-            interpolation,
-        );
+        collect_boundary_peaks(channel, &mut frame_peaks, 0..CENTER_TAP, interpolation);
         let trailing_start = frame_count - TRAILING_BOUNDARY_FRAMES;
         collect_boundary_peaks(
-            channel_audio,
+            channel,
             &mut frame_peaks,
             trailing_start..frame_count,
             interpolation,
         );
 
         for phase in TWO_X_PHASES {
-            convolve_phase(channel_audio, &mut frame_peaks, &COEFFICIENTS[phase]);
+            convolve_phase(channel, &mut frame_peaks, &COEFFICIENTS[phase]);
         }
         if interpolation == InterpolationFactor::Four {
             for phase in FOUR_X_ADDITIONAL_PHASES {
-                convolve_phase(channel_audio, &mut frame_peaks, &COEFFICIENTS[phase]);
+                convolve_phase(channel, &mut frame_peaks, &COEFFICIENTS[phase]);
             }
         }
     }
@@ -84,15 +74,15 @@ fn collect_interpolated_peaks(
 }
 
 fn collect_boundary_peaks(
-    channel_audio: &[f32],
+    audio_channel: &[f32],
     frame_peaks: &mut [f32],
     frames: Range<usize>,
     interpolation: InterpolationFactor,
 ) {
     for i_frame in frames {
         let peak = calc_interpolated_peak_at_frame(
-            |source_frame| channel_audio[source_frame],
-            channel_audio.len(),
+            |i_src_frame| audio_channel[i_src_frame],
+            audio_channel.len(),
             i_frame,
             interpolation,
         );
@@ -105,27 +95,27 @@ fn collect_boundary_peaks(
 // reductions or architecture-specific intrinsics.
 #[inline(never)]
 fn convolve_phase(
-    channel_audio: &[f32],
+    audio_channel: &[f32],
     frame_peaks: &mut [f32],
     coefficients: &[f32; FIR_TAP_COUNT],
 ) {
-    debug_assert_eq!(channel_audio.len(), frame_peaks.len());
-    debug_assert!(channel_audio.len() >= FIR_TAP_COUNT);
+    debug_assert_eq!(audio_channel.len(), frame_peaks.len());
+    debug_assert!(audio_channel.len() >= FIR_TAP_COUNT);
 
-    let interior_len = channel_audio.len() - (FIR_TAP_COUNT - 1);
+    let interior_len = audio_channel.len() - (FIR_TAP_COUNT - 1);
     for index in 0..interior_len {
-        let sum = channel_audio[index] * coefficients[11]
-            + channel_audio[index + 1] * coefficients[10]
-            + channel_audio[index + 2] * coefficients[9]
-            + channel_audio[index + 3] * coefficients[8]
-            + channel_audio[index + 4] * coefficients[7]
-            + channel_audio[index + 5] * coefficients[6]
-            + channel_audio[index + 6] * coefficients[5]
-            + channel_audio[index + 7] * coefficients[4]
-            + channel_audio[index + 8] * coefficients[3]
-            + channel_audio[index + 9] * coefficients[2]
-            + channel_audio[index + 10] * coefficients[1]
-            + channel_audio[index + 11] * coefficients[0];
+        let sum = audio_channel[index] * coefficients[11]
+            + audio_channel[index + 1] * coefficients[10]
+            + audio_channel[index + 2] * coefficients[9]
+            + audio_channel[index + 3] * coefficients[8]
+            + audio_channel[index + 4] * coefficients[7]
+            + audio_channel[index + 5] * coefficients[6]
+            + audio_channel[index + 6] * coefficients[5]
+            + audio_channel[index + 7] * coefficients[4]
+            + audio_channel[index + 8] * coefficients[3]
+            + audio_channel[index + 9] * coefficients[2]
+            + audio_channel[index + 10] * coefficients[1]
+            + audio_channel[index + 11] * coefficients[0];
         let frame_peak = &mut frame_peaks[index + CENTER_TAP];
         *frame_peak = frame_peak.max(sum.abs());
     }
@@ -157,18 +147,18 @@ fn pre_upsample(
     let factor = coefficients.len();
     let upsampled_frame_count = frame_count * factor;
     let mut upsampled = vec![0.0; audio.len() * factor];
-    let mut phase_output = vec![0.0; frame_count];
-    let mut mirror_phase_output = vec![0.0; frame_count];
+    let mut phase_out = vec![0.0; frame_count];
+    let mut mirror_out = vec![0.0; frame_count];
     let (interior_start, interior_end) = calc_pre_upsample_interior_bounds(frame_count);
 
     for i_channel in 0..channels {
-        let input_offset = i_channel * frame_count;
-        let output_offset = i_channel * upsampled_frame_count;
-        let channel_audio = &audio[input_offset..input_offset + frame_count];
-        let channel_output = &mut upsampled[output_offset..output_offset + upsampled_frame_count];
+        let in_offset = i_channel * frame_count;
+        let out_offset = i_channel * upsampled_frame_count;
+        let channel = &audio[in_offset..in_offset + frame_count];
+        let out_channel = &mut upsampled[out_offset..out_offset + upsampled_frame_count];
 
-        for (output_frame, &sample) in channel_output.chunks_exact_mut(factor).zip(channel_audio) {
-            output_frame[0] = sample;
+        for (out_frame, &sample) in out_channel.chunks_exact_mut(factor).zip(channel) {
+            out_frame[0] = sample;
         }
 
         for (i_phase, phase_coefficients) in coefficients
@@ -179,39 +169,32 @@ fn pre_upsample(
         {
             let mirror_phase = factor - i_phase;
             calculate_mirrored_phase(
-                channel_audio,
-                &mut phase_output,
-                &mut mirror_phase_output,
+                channel,
+                &mut phase_out,
+                &mut mirror_out,
                 interior_start,
                 interior_end,
                 phase_coefficients,
             );
-            for (output_frame, &sample) in
-                channel_output.chunks_exact_mut(factor).zip(&phase_output)
-            {
-                output_frame[i_phase] = sample;
+            for (out_frame, &sample) in out_channel.chunks_exact_mut(factor).zip(&phase_out) {
+                out_frame[i_phase] = sample;
             }
-            for (output_frame, &sample) in channel_output
-                .chunks_exact_mut(factor)
-                .zip(&mirror_phase_output)
-            {
-                output_frame[mirror_phase] = sample;
+            for (out_frame, &sample) in out_channel.chunks_exact_mut(factor).zip(&mirror_out) {
+                out_frame[mirror_phase] = sample;
             }
         }
 
         if factor.is_multiple_of(2) {
             let i_phase = factor / 2;
             calculate_symmetric_phase(
-                channel_audio,
-                &mut phase_output,
+                channel,
+                &mut phase_out,
                 interior_start,
                 interior_end,
                 &coefficients[i_phase],
             );
-            for (output_frame, &sample) in
-                channel_output.chunks_exact_mut(factor).zip(&phase_output)
-            {
-                output_frame[i_phase] = sample;
+            for (out_frame, &sample) in out_channel.chunks_exact_mut(factor).zip(&phase_out) {
+                out_frame[i_phase] = sample;
             }
         }
     }
@@ -220,8 +203,8 @@ fn pre_upsample(
 
 fn calculate_mirrored_phase(
     audio: &[f32],
-    output: &mut [f32],
-    mirror_output: &mut [f32],
+    phase_out: &mut [f32],
+    mirror_out: &mut [f32],
     interior_start: usize,
     interior_end: usize,
     coefficients: &[f32; PRE_UPSAMPLE_TAPS],
@@ -230,8 +213,8 @@ fn calculate_mirrored_phase(
     // samples lets both outputs share two products instead of using four.
     let frame_count = audio.len();
     for i_frame in 0..interior_start {
-        (output[i_frame], mirror_output[i_frame]) = pre_upsample_mirrored_samples(
-            |source_frame| audio[source_frame],
+        (phase_out[i_frame], mirror_out[i_frame]) = pre_upsample_mirrored_samples(
+            |i_src_frame| audio[i_src_frame],
             i_frame,
             frame_count,
             coefficients,
@@ -239,8 +222,8 @@ fn calculate_mirrored_phase(
     }
 
     if interior_start < interior_end {
-        output[interior_start..interior_end].fill(0.0);
-        mirror_output[interior_start..interior_end].fill(0.0);
+        phase_out[interior_start..interior_end].fill(0.0);
+        mirror_out[interior_start..interior_end].fill(0.0);
         let interior_length = interior_end - interior_start;
         for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
             let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
@@ -255,15 +238,15 @@ fn calculate_mirrored_phase(
                 let common = (source[i_frame] + mirror_source[i_frame]) * common_coefficient;
                 let differential =
                     (source[i_frame] - mirror_source[i_frame]) * differential_coefficient;
-                output[interior_start + i_frame] += common + differential;
-                mirror_output[interior_start + i_frame] += common - differential;
+                phase_out[interior_start + i_frame] += common + differential;
+                mirror_out[interior_start + i_frame] += common - differential;
             }
         }
     }
 
     for i_frame in interior_end..frame_count {
-        (output[i_frame], mirror_output[i_frame]) = pre_upsample_mirrored_samples(
-            |source_frame| audio[source_frame],
+        (phase_out[i_frame], mirror_out[i_frame]) = pre_upsample_mirrored_samples(
+            |i_src_frame| audio[i_src_frame],
             i_frame,
             frame_count,
             coefficients,
@@ -281,9 +264,9 @@ fn calculate_symmetric_phase(
     // The half-sample phase is self-symmetric, so each input pair shares one
     // coefficient and needs one product instead of two.
     let frame_count = audio.len();
-    for (i_frame, output_sample) in output[..interior_start].iter_mut().enumerate() {
-        *output_sample = pre_upsample_symmetric_sample(
-            |source_frame| audio[source_frame],
+    for (i_frame, out_sample) in output[..interior_start].iter_mut().enumerate() {
+        *out_sample = pre_upsample_symmetric_sample(
+            |i_src_frame| audio[i_src_frame],
             i_frame,
             frame_count,
             coefficients,
@@ -306,9 +289,9 @@ fn calculate_symmetric_phase(
         }
     }
 
-    for (i_frame, output_sample) in output[interior_end..].iter_mut().enumerate() {
-        *output_sample = pre_upsample_symmetric_sample(
-            |source_frame| audio[source_frame],
+    for (i_frame, out_sample) in output[interior_end..].iter_mut().enumerate() {
+        *out_sample = pre_upsample_symmetric_sample(
+            |i_src_frame| audio[i_src_frame],
             interior_end + i_frame,
             frame_count,
             coefficients,
@@ -330,10 +313,10 @@ mod tests {
         let frame_count = frame_peaks.len();
         for i_channel in 0..channels {
             let channel_offset = i_channel * frame_count;
-            let channel_audio = &audio[channel_offset..channel_offset + frame_count];
+            let channel = &audio[channel_offset..channel_offset + frame_count];
             for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
                 let peak = calc_interpolated_peak_at_frame(
-                    |source_frame| channel_audio[source_frame],
+                    |i_src_frame| channel[i_src_frame],
                     frame_count,
                     i_frame,
                     interpolation,
@@ -354,15 +337,14 @@ mod tests {
         let upsampled_frame_count = frame_count * factor;
         let mut upsampled = vec![0.0; audio.len() * factor];
         for i_channel in 0..channels {
-            let input_offset = i_channel * frame_count;
-            let output_offset = i_channel * upsampled_frame_count;
-            let channel_audio = &audio[input_offset..input_offset + frame_count];
-            let channel_output =
-                &mut upsampled[output_offset..output_offset + upsampled_frame_count];
+            let in_offset = i_channel * frame_count;
+            let out_offset = i_channel * upsampled_frame_count;
+            let channel = &audio[in_offset..in_offset + frame_count];
+            let out_channel = &mut upsampled[out_offset..out_offset + upsampled_frame_count];
             for i_frame in 0..frame_count {
                 for (i_phase, phase_coefficients) in coefficients.iter().enumerate() {
-                    channel_output[i_frame * factor + i_phase] = pre_upsample_sample(
-                        |source_frame| channel_audio[source_frame],
+                    out_channel[i_frame * factor + i_phase] = pre_upsample_sample(
+                        |i_src_frame| channel[i_src_frame],
                         i_frame,
                         frame_count,
                         phase_coefficients,
@@ -432,11 +414,11 @@ mod tests {
         for channels in [1, 2, 3, 4, 8] {
             for frame_count in [0, 1, 31, 32, 63, 64, 65, 257] {
                 let channel_samples: Vec<Vec<f32>> = (0..channels)
-                    .map(|channel| {
+                    .map(|i_channel| {
                         (0..frame_count)
-                            .map(|frame| {
-                                let index = channel * frame_count + frame;
-                                ((index as f64 * 0.731).sin() + (index as f64 * 0.193).cos()) as f32
+                            .map(|i_frame| {
+                                let i = i_channel * frame_count + i_frame;
+                                ((i as f64 * 0.731).sin() + (i as f64 * 0.193).cos()) as f32
                             })
                             .collect()
                     })

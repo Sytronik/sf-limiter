@@ -119,7 +119,7 @@ fn planar_processing_matches_interleaved_processing() {
         .unwrap();
 
     let planar_as_interleaved: Vec<_> = (0..4)
-        .flat_map(|frame| [planar[frame], planar[4 + frame]])
+        .flat_map(|i_frame| [planar[i_frame], planar[4 + i_frame]])
         .collect();
     assert_eq!(planar_frame_gains, interleaved_output.frame_gains);
     assert_eq!(planar_as_interleaved, interleaved_output.audio);
@@ -129,8 +129,8 @@ fn planar_processing_matches_interleaved_processing() {
 #[test]
 fn true_peak_planar_processing_matches_interleaved_processing() {
     let interleaved: Vec<_> = (0..128)
-        .flat_map(|frame| {
-            let sample = (((2.0 * std::f64::consts::PI * 12_000.0 * frame as f64 / 48_000.0)
+        .flat_map(|i_frame| {
+            let sample = (((2.0 * std::f64::consts::PI * 12_000.0 * i_frame as f64 / 48_000.0)
                 + std::f64::consts::FRAC_PI_4)
                 .sin() as f32)
                 * 1.1;
@@ -150,7 +150,7 @@ fn true_peak_planar_processing_matches_interleaved_processing() {
         .process_planar_inplace(&mut planar, 2)
         .unwrap();
     let planar_as_interleaved: Vec<_> = (0..128)
-        .flat_map(|frame| [planar[frame], planar[128 + frame]])
+        .flat_map(|i_frame| [planar[i_frame], planar[128 + i_frame]])
         .collect();
 
     assert_eq!(planar_frame_gains, interleaved_output.frame_gains);

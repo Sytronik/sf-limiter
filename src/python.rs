@@ -257,7 +257,7 @@ fn process_numpy<'py>(
         1 => {
             normalize_axis(axis, 1)?;
             let planar = audio.as_slice().map_or_else(
-                || (0..shape[0]).map(|frame| audio[[frame]]).collect(),
+                || (0..shape[0]).map(|i_frame| audio[[i_frame]]).collect(),
                 <[f32]>::to_vec,
             );
             (planar, 1, None)
@@ -277,9 +277,9 @@ fn process_numpy<'py>(
                 audio.as_slice().map_or_else(
                     || {
                         let mut planar = Vec::with_capacity(audio.len());
-                        for channel in 0..channels {
-                            for frame in 0..frames {
-                                planar.push(audio[[channel, frame]]);
+                        for i_channel in 0..channels {
+                            for i_frame in 0..frames {
+                                planar.push(audio[[i_channel, i_frame]]);
                             }
                         }
                         planar
@@ -288,9 +288,9 @@ fn process_numpy<'py>(
                 )
             } else {
                 let mut planar = Vec::with_capacity(audio.len());
-                for channel in 0..channels {
-                    for frame in 0..frames {
-                        planar.push(audio[[frame, channel]]);
+                for i_channel in 0..channels {
+                    for i_frame in 0..frames {
+                        planar.push(audio[[i_frame, i_channel]]);
                     }
                 }
                 planar
@@ -313,9 +313,9 @@ fn process_numpy<'py>(
         .map_err(|error| match (error, interleaved_shape) {
             (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
                 let channel = index / frames;
-                let frame = index % frames;
+                let i_frame = index % frames;
                 value_error(LimiterError::NonFiniteSample {
-                    index: frame * channels + channel,
+                    index: i_frame * channels + channel,
                 })
             }
             (error, _) => value_error(error),
@@ -334,9 +334,9 @@ fn process_numpy<'py>(
 
 fn planar_to_interleaved(samples: &[f32], frames: usize, channels: usize) -> Vec<f32> {
     let mut interleaved = Vec::with_capacity(samples.len());
-    for frame in 0..frames {
-        for channel in 0..channels {
-            interleaved.push(samples[channel * frames + frame]);
+    for i_frame in 0..frames {
+        for i_channel in 0..channels {
+            interleaved.push(samples[i_channel * frames + i_frame]);
         }
     }
     interleaved

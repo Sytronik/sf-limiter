@@ -94,7 +94,7 @@ fn collect_boundary_peaks(
     for i_frame in frames {
         for i_channel in 0..channels {
             let peak = calc_interpolated_peak_at_frame(
-                |source_frame| audio[source_frame * channels + i_channel],
+                |i_src_frame| audio[i_src_frame * channels + i_channel],
                 frame_count,
                 i_frame,
                 interpolation,
@@ -166,9 +166,9 @@ fn pre_upsample(
 
     let mut upsampled = vec![0.0; audio.len() * factor];
 
-    for (i_frame, input_frame) in audio.chunks_exact(channels).enumerate() {
-        let output_start = i_frame * factor * channels;
-        upsampled[output_start..output_start + channels].copy_from_slice(input_frame);
+    for (i_frame, frame) in audio.chunks_exact(channels).enumerate() {
+        let out_start = i_frame * factor * channels;
+        upsampled[out_start..out_start + channels].copy_from_slice(frame);
     }
 
     let (interior_start, interior_end) = calc_pre_upsample_interior_bounds(frame_count);
@@ -240,19 +240,19 @@ fn convolve_mirrored_phase_frame(
     // Phase p and phase factor-p use reversed coefficients. Pairing mirrored
     // samples lets both outputs share two products instead of using four.
     let mirror_phase = factor - i_phase;
-    let output_start = (i_frame * factor + i_phase) * channels;
-    let mirror_output_start = (i_frame * factor + mirror_phase) * channels;
-    let (primary_output, mirror_output) = upsampled.split_at_mut(mirror_output_start);
-    let primary_output = &mut primary_output[output_start..output_start + channels];
-    let mirror_output = &mut mirror_output[..channels];
+    let out_start = (i_frame * factor + i_phase) * channels;
+    let mirror_out_start = (i_frame * factor + mirror_phase) * channels;
+    let (primary_out, mirror_out) = upsampled.split_at_mut(mirror_out_start);
+    let primary_out = &mut primary_out[out_start..out_start + channels];
+    let mirror_out = &mut mirror_out[..channels];
 
     for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
         let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let source_frame = i_frame + tap - PRE_UPSAMPLE_CENTER;
-        let mirror_source_frame = i_frame + mirror_tap - PRE_UPSAMPLE_CENTER;
-        let input = &audio[source_frame * channels..(source_frame + 1) * channels];
+        let i_src_frame = i_frame + tap - PRE_UPSAMPLE_CENTER;
+        let i_mirror_src_frame = i_frame + mirror_tap - PRE_UPSAMPLE_CENTER;
+        let input = &audio[i_src_frame * channels..(i_src_frame + 1) * channels];
         let mirror_input =
-            &audio[mirror_source_frame * channels..(mirror_source_frame + 1) * channels];
+            &audio[i_mirror_src_frame * channels..(i_mirror_src_frame + 1) * channels];
         let common_coefficient = (coefficients[tap] + coefficients[mirror_tap]) * 0.5;
         let differential_coefficient = (coefficients[tap] - coefficients[mirror_tap]) * 0.5;
 
@@ -260,8 +260,8 @@ fn convolve_mirrored_phase_frame(
             let common = (input[i_channel] + mirror_input[i_channel]) * common_coefficient;
             let differential =
                 (input[i_channel] - mirror_input[i_channel]) * differential_coefficient;
-            primary_output[i_channel] += common + differential;
-            mirror_output[i_channel] += common - differential;
+            primary_out[i_channel] += common + differential;
+            mirror_out[i_channel] += common - differential;
         }
     }
 }
@@ -277,16 +277,16 @@ fn convolve_symmetric_phase_frame(
 ) {
     // The half-sample phase is self-symmetric, so each input pair shares one
     // coefficient and needs one product instead of two.
-    let output_start = (i_frame * factor + i_phase) * channels;
-    let output = &mut upsampled[output_start..output_start + channels];
+    let out_start = (i_frame * factor + i_phase) * channels;
+    let output = &mut upsampled[out_start..out_start + channels];
 
     for (tap, &coefficient) in coefficients.iter().take(PRE_UPSAMPLE_TAPS / 2).enumerate() {
         let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let source_frame = i_frame + tap - PRE_UPSAMPLE_CENTER;
-        let mirror_source_frame = i_frame + mirror_tap - PRE_UPSAMPLE_CENTER;
-        let input = &audio[source_frame * channels..(source_frame + 1) * channels];
+        let i_src_frame = i_frame + tap - PRE_UPSAMPLE_CENTER;
+        let i_mirror_src_frame = i_frame + mirror_tap - PRE_UPSAMPLE_CENTER;
+        let input = &audio[i_src_frame * channels..(i_src_frame + 1) * channels];
         let mirror_input =
-            &audio[mirror_source_frame * channels..(mirror_source_frame + 1) * channels];
+            &audio[i_mirror_src_frame * channels..(i_mirror_src_frame + 1) * channels];
 
         for i_channel in 0..channels {
             output[i_channel] += (input[i_channel] + mirror_input[i_channel]) * coefficient;
@@ -314,7 +314,7 @@ fn pre_upsample_scalar(
             {
                 let mirror_phase = factor - i_phase;
                 let (sample, mirror_sample) = pre_upsample_mirrored_samples(
-                    |source_frame| audio[source_frame * channels + i_channel],
+                    |i_src_frame| audio[i_src_frame * channels + i_channel],
                     i_frame,
                     frame_count,
                     phase_coefficients,
@@ -326,7 +326,7 @@ fn pre_upsample_scalar(
                 let i_phase = factor / 2;
                 upsampled[(i_frame * factor + i_phase) * channels + i_channel] =
                     pre_upsample_symmetric_sample(
-                        |source_frame| audio[source_frame * channels + i_channel],
+                        |i_src_frame| audio[i_src_frame * channels + i_channel],
                         i_frame,
                         frame_count,
                         &coefficients[i_phase],
@@ -355,7 +355,7 @@ fn pre_upsample_boundary_frame(
         let mirror_phase = factor - i_phase;
         for i_channel in 0..channels {
             let (sample, mirror_sample) = pre_upsample_mirrored_samples(
-                |source_frame| audio[source_frame * channels + i_channel],
+                |i_src_frame| audio[i_src_frame * channels + i_channel],
                 i_frame,
                 frame_count,
                 phase_coefficients,
@@ -369,7 +369,7 @@ fn pre_upsample_boundary_frame(
         for i_channel in 0..channels {
             upsampled[(i_frame * factor + i_phase) * channels + i_channel] =
                 pre_upsample_symmetric_sample(
-                    |source_frame| audio[source_frame * channels + i_channel],
+                    |i_src_frame| audio[i_src_frame * channels + i_channel],
                     i_frame,
                     frame_count,
                     &coefficients[i_phase],
@@ -393,7 +393,7 @@ mod tests {
         for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
             for i_channel in 0..channels {
                 let peak = calc_interpolated_peak_at_frame(
-                    |source_frame| audio[source_frame * channels + i_channel],
+                    |i_src_frame| audio[i_src_frame * channels + i_channel],
                     frame_count,
                     i_frame,
                     interpolation,
@@ -417,7 +417,7 @@ mod tests {
                 for (i_phase, phase_coefficients) in coefficients.iter().enumerate() {
                     upsampled[(i_frame * factor + i_phase) * channels + i_channel] =
                         pre_upsample_sample(
-                            |source_frame| audio[source_frame * channels + i_channel],
+                            |i_src_frame| audio[i_src_frame * channels + i_channel],
                             i_frame,
                             frame_count,
                             phase_coefficients,

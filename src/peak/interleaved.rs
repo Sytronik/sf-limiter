@@ -3,11 +3,11 @@ use std::ops::Range;
 use crate::{LimiterError, layout::validate_layout};
 
 use super::{
-    CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_ADDITIONAL_PHASES, InterpolationFactor,
+    CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_MIRRORED_PHASES, InterpolationFactor,
     PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
-    calc_interpolated_peak_at_frame, calc_pre_upsample_interior_bounds,
-    pre_upsample_mirrored_samples, pre_upsample_symmetric_sample, reduce_upsampled_peaks,
-    validate_finite_samples,
+    calc_interpolated_peak_at_frame, calc_mirrored_terms, calc_pre_upsample_interior_bounds,
+    decompose_mirrored_coefficients, pre_upsample_mirrored_samples, pre_upsample_symmetric_sample,
+    reduce_upsampled_peaks, validate_finite_samples,
 };
 
 pub(super) fn collect(
@@ -72,12 +72,16 @@ fn collect_interpolated_peaks(
         interpolation,
     );
 
-    for phase in TWO_X_PHASES {
-        convolve_phase(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
-    }
-    if interpolation == InterpolationFactor::Four {
-        for phase in FOUR_X_ADDITIONAL_PHASES {
-            convolve_phase(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
+    match interpolation {
+        InterpolationFactor::Two => {
+            for phase in TWO_X_PHASES {
+                convolve_phase(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
+            }
+        }
+        InterpolationFactor::Four => {
+            for phase in FOUR_X_MIRRORED_PHASES {
+                convolve_mirrored_phases(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
+            }
         }
     }
     Ok(frame_peaks)
@@ -95,8 +99,8 @@ fn collect_boundary_peaks(
         for i_channel in 0..channels {
             let peak = calc_interpolated_peak_at_frame(
                 |i_src_frame| audio[i_src_frame * channels + i_channel],
-                frame_count,
                 i_frame,
+                frame_count,
                 interpolation,
             );
             frame_peaks[i_frame] = frame_peaks[i_frame].max(peak);
@@ -137,6 +141,79 @@ fn convolve_phase(
                 + window[10 * channels + i_channel] * coefficients[1]
                 + window[11 * channels + i_channel] * coefficients[0];
             peak = peak.max(sum.abs());
+        }
+        frame_peaks[i_window + CENTER_TAP] = peak;
+    }
+}
+
+// The two output phases use reversed coefficient orders. Keeping each tap at a
+// fixed channel offset lets LLVM vectorize this loop across channels.
+#[inline(never)]
+fn convolve_mirrored_phases(
+    audio: &[f32],
+    frame_peaks: &mut [f32],
+    channels: usize,
+    coefficients: &[f32; FIR_TAP_COUNT],
+) {
+    debug_assert_eq!(audio.len(), frame_peaks.len() * channels);
+    debug_assert!(channels >= 4);
+    debug_assert!(frame_peaks.len() >= FIR_TAP_COUNT);
+
+    let coefficient_pairs: [(f32, f32); FIR_TAP_COUNT / 2] = std::array::from_fn(|tap| {
+        decompose_mirrored_coefficients(coefficients[tap], coefficients[FIR_TAP_COUNT - 1 - tap])
+    });
+    let interior_len = frame_peaks.len() - (FIR_TAP_COUNT - 1);
+    for i_window in 0..interior_len {
+        let window_start = i_window * channels;
+        let window = &audio[window_start..window_start + FIR_TAP_COUNT * channels];
+        let mut peak = frame_peaks[i_window + CENTER_TAP];
+        for i_channel in 0..channels {
+            let (common_0, differential_0) = calc_mirrored_terms(
+                window[i_channel],
+                window[11 * channels + i_channel],
+                coefficient_pairs[0].0,
+                coefficient_pairs[0].1,
+            );
+            let (common_1, differential_1) = calc_mirrored_terms(
+                window[channels + i_channel],
+                window[10 * channels + i_channel],
+                coefficient_pairs[1].0,
+                coefficient_pairs[1].1,
+            );
+            let (common_2, differential_2) = calc_mirrored_terms(
+                window[2 * channels + i_channel],
+                window[9 * channels + i_channel],
+                coefficient_pairs[2].0,
+                coefficient_pairs[2].1,
+            );
+            let (common_3, differential_3) = calc_mirrored_terms(
+                window[3 * channels + i_channel],
+                window[8 * channels + i_channel],
+                coefficient_pairs[3].0,
+                coefficient_pairs[3].1,
+            );
+            let (common_4, differential_4) = calc_mirrored_terms(
+                window[4 * channels + i_channel],
+                window[7 * channels + i_channel],
+                coefficient_pairs[4].0,
+                coefficient_pairs[4].1,
+            );
+            let (common_5, differential_5) = calc_mirrored_terms(
+                window[5 * channels + i_channel],
+                window[6 * channels + i_channel],
+                coefficient_pairs[5].0,
+                coefficient_pairs[5].1,
+            );
+            let common_sum = common_0 + common_1 + common_2 + common_3 + common_4 + common_5;
+            let differential_sum = differential_0
+                + differential_1
+                + differential_2
+                + differential_3
+                + differential_4
+                + differential_5;
+            let sample = common_sum + differential_sum;
+            let mirror_sample = common_sum - differential_sum;
+            peak = peak.max(sample.abs()).max(mirror_sample.abs());
         }
         frame_peaks[i_window + CENTER_TAP] = peak;
     }
@@ -253,13 +330,16 @@ fn convolve_mirrored_phase_frame(
         let input = &audio[i_src_frame * channels..(i_src_frame + 1) * channels];
         let mirror_input =
             &audio[i_mirror_src_frame * channels..(i_mirror_src_frame + 1) * channels];
-        let common_coefficient = (coefficients[tap] + coefficients[mirror_tap]) * 0.5;
-        let differential_coefficient = (coefficients[tap] - coefficients[mirror_tap]) * 0.5;
+        let (common_coefficient, differential_coefficient) =
+            decompose_mirrored_coefficients(coefficients[tap], coefficients[mirror_tap]);
 
         for i_channel in 0..channels {
-            let common = (input[i_channel] + mirror_input[i_channel]) * common_coefficient;
-            let differential =
-                (input[i_channel] - mirror_input[i_channel]) * differential_coefficient;
+            let (common, differential) = calc_mirrored_terms(
+                input[i_channel],
+                mirror_input[i_channel],
+                common_coefficient,
+                differential_coefficient,
+            );
             primary_out[i_channel] += common + differential;
             mirror_out[i_channel] += common - differential;
         }
@@ -381,7 +461,20 @@ fn pre_upsample_boundary_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peak::{convolve_scalar, pre_upsample_sample};
+    use crate::peak::{
+        calc_interpolated_peak_at_frame_reference, convolve_scalar, pre_upsample_sample,
+    };
+
+    fn assert_peaks_close(actual: &[f32], expected: &[f32], context: &str) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            let tolerance = 16.0 * f32::EPSILON * expected.abs().max(1.0);
+            assert!(
+                (*actual - expected).abs() <= tolerance,
+                "{context}, actual={actual}, expected={expected}, tolerance={tolerance}"
+            );
+        }
+    }
 
     fn collect_interpolated_peaks_scalar_reference(
         audio: &[f32],
@@ -392,10 +485,10 @@ mod tests {
         let frame_count = frame_peaks.len();
         for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
             for i_channel in 0..channels {
-                let peak = calc_interpolated_peak_at_frame(
+                let peak = calc_interpolated_peak_at_frame_reference(
                     |i_src_frame| audio[i_src_frame * channels + i_channel],
-                    frame_count,
                     i_frame,
+                    frame_count,
                     interpolation,
                 );
                 *frame_peak = frame_peak.max(peak);
@@ -472,15 +565,22 @@ mod tests {
                     })
                     .collect();
                 for interpolation in [InterpolationFactor::Two, InterpolationFactor::Four] {
-                    assert_eq!(
-                        collect_interpolated_peaks(&audio, channels, interpolation).unwrap(),
-                        collect_interpolated_peaks_scalar_reference(
-                            &audio,
-                            channels,
-                            interpolation,
-                        ),
+                    let actual =
+                        collect_interpolated_peaks(&audio, channels, interpolation).unwrap();
+                    let expected = collect_interpolated_peaks_scalar_reference(
+                        &audio,
+                        channels,
+                        interpolation,
+                    );
+                    let context = format!(
                         "channels={channels}, frame_count={frame_count}, interpolation={interpolation:?}"
                     );
+                    match interpolation {
+                        InterpolationFactor::Two => assert_eq!(actual, expected, "{context}"),
+                        InterpolationFactor::Four => {
+                            assert_peaks_close(&actual, &expected, &context)
+                        }
+                    }
                 }
             }
         }

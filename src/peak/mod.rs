@@ -145,6 +145,7 @@ pub(super) fn calc_interpolated_peak_at_frame(
     }
 }
 
+#[cfg(test)]
 pub(super) fn pre_upsample_sample(
     mut sample: impl FnMut(usize) -> f32,
     frame: usize,
@@ -163,6 +164,60 @@ pub(super) fn pre_upsample_sample(
     sum
 }
 
+pub(super) fn pre_upsample_symmetric_sample(
+    mut sample: impl FnMut(usize) -> f32,
+    frame: usize,
+    frame_count: usize,
+    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+) -> f32 {
+    let mut sum = 0.0_f32;
+    for (tap, &coefficient) in coefficients.iter().take(PRE_UPSAMPLE_TAPS / 2).enumerate() {
+        let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
+        let input = pre_upsample_source_sample(&mut sample, frame, frame_count, tap);
+        let mirror_input = pre_upsample_source_sample(&mut sample, frame, frame_count, mirror_tap);
+        sum += (input + mirror_input) * coefficient;
+    }
+    sum
+}
+
+pub(super) fn pre_upsample_mirrored_samples(
+    mut sample: impl FnMut(usize) -> f32,
+    frame: usize,
+    frame_count: usize,
+    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+) -> (f32, f32) {
+    let mut primary_sum = 0.0_f32;
+    let mut mirror_sum = 0.0_f32;
+    for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
+        let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
+        let input = pre_upsample_source_sample(&mut sample, frame, frame_count, tap);
+        let mirror_input = pre_upsample_source_sample(&mut sample, frame, frame_count, mirror_tap);
+        let coefficient = coefficients[tap];
+        let mirror_coefficient = coefficients[mirror_tap];
+        let common = (input + mirror_input) * ((coefficient + mirror_coefficient) * 0.5);
+        let differential = (input - mirror_input) * ((coefficient - mirror_coefficient) * 0.5);
+        primary_sum += common + differential;
+        mirror_sum += common - differential;
+    }
+    (primary_sum, mirror_sum)
+}
+
+fn pre_upsample_source_sample(
+    sample: &mut impl FnMut(usize) -> f32,
+    frame: usize,
+    frame_count: usize,
+    tap: usize,
+) -> f32 {
+    let source_frame = frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
+    if let Ok(source_frame) = usize::try_from(source_frame)
+        && source_frame < frame_count
+    {
+        sample(source_frame)
+    } else {
+        0.0
+    }
+}
+
 /// Builds a 64-tap polyphase FIR bank for band-limited pre-upsampling.
 ///
 /// Each active phase is a Kaiser-windowed sinc fractional-delay filter. The
@@ -179,22 +234,51 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
     coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
     let kaiser_denominator = modified_bessel_i0(PRE_UPSAMPLE_KAISER_BETA);
 
-    for (i_phase, phase_coefficients) in coefficients.iter_mut().enumerate().skip(1) {
-        let fraction = i_phase as f64 / factor as f64;
-        let mut normalization = 0.0_f64;
-        for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
-            let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f64;
-            let sinc = (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance);
-            let window_position = distance / (PRE_UPSAMPLE_TAPS as f64 / 2.0);
-            let window = modified_bessel_i0(
-                PRE_UPSAMPLE_KAISER_BETA * (1.0 - window_position * window_position).sqrt(),
-            ) / kaiser_denominator;
-            let value = sinc * window;
-            *coefficient = value as f32;
-            normalization += value;
+    for i_phase in 1..=factor / 2 {
+        {
+            let phase_coefficients = &mut coefficients[i_phase];
+            let fraction = i_phase as f64 / factor as f64;
+            let mut normalization = 0.0_f64;
+            for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
+                let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f64;
+                let sinc =
+                    (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance);
+                let window_position = distance / (PRE_UPSAMPLE_TAPS as f64 / 2.0);
+                let window = modified_bessel_i0(
+                    PRE_UPSAMPLE_KAISER_BETA * (1.0 - window_position * window_position).sqrt(),
+                ) / kaiser_denominator;
+                let value = sinc * window;
+                *coefficient = value as f32;
+                normalization += value;
+            }
+            for coefficient in phase_coefficients {
+                *coefficient = (*coefficient as f64 / normalization) as f32;
+            }
         }
-        for coefficient in phase_coefficients {
-            *coefficient = (*coefficient as f64 / normalization) as f32;
+
+        let mirror_phase = factor - i_phase;
+        if mirror_phase == i_phase {
+            for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
+                let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
+                let coefficient =
+                    (coefficients[i_phase][tap] + coefficients[i_phase][mirror_tap]) * 0.5;
+                coefficients[i_phase][tap] = coefficient;
+                coefficients[i_phase][mirror_tap] = coefficient;
+            }
+            let normalization: f32 = coefficients[i_phase].iter().sum();
+            for coefficient in &mut coefficients[i_phase] {
+                *coefficient /= normalization;
+            }
+        } else {
+            let (primary_phases, mirror_phases) = coefficients.split_at_mut(mirror_phase);
+            let phase_coefficients = &primary_phases[i_phase];
+            let mirror_coefficients = &mut mirror_phases[0];
+            for (coefficient, &source) in mirror_coefficients
+                .iter_mut()
+                .zip(phase_coefficients.iter().rev())
+            {
+                *coefficient = source;
+            }
         }
     }
     coefficients
@@ -491,6 +575,23 @@ mod tests {
         for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
             let config = PeakConfig::new(sample_rate, true).unwrap();
             assert!(!matches!(config, PeakConfig::PreUpsampled { .. }));
+        }
+    }
+
+    #[test]
+    fn pre_upsample_phase_coefficients_have_exact_mirror_symmetry() {
+        for factor in [2, 3, 4, 6] {
+            let coefficients = build_pre_upsample_coefficients(factor);
+            for i_phase in 1..factor {
+                let mirror_phase = factor - i_phase;
+                for tap in 0..PRE_UPSAMPLE_TAPS {
+                    assert_eq!(
+                        coefficients[i_phase][tap],
+                        coefficients[mirror_phase][PRE_UPSAMPLE_TAPS - 1 - tap],
+                        "factor={factor}, phase={i_phase}, tap={tap}"
+                    );
+                }
+            }
         }
     }
 

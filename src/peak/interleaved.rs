@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn vectorizable_pre_upsampling_matches_scalar_reference() {
         for channels in [1, 2, 3, 4, 8] {
-            for frame_count in [0, 1, 11, 12, 23, 24, 25, 257] {
+            for frame_count in [0, 1, 31, 32, 63, 64, 65, 257] {
                 let audio: Vec<_> = (0..frame_count * channels)
                     .map(|i_sample| {
                         ((i_sample as f64 * 0.731).sin() + (i_sample as f64 * 0.193).cos()) as f32

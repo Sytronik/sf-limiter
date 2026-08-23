@@ -41,8 +41,9 @@ pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
     ],
 ];
 
-pub(super) const PRE_UPSAMPLE_TAPS: usize = 24;
-pub(super) const PRE_UPSAMPLE_CENTER: usize = 11;
+pub(super) const PRE_UPSAMPLE_TAPS: usize = 64;
+pub(super) const PRE_UPSAMPLE_CENTER: usize = PRE_UPSAMPLE_TAPS / 2 - 1;
+const PRE_UPSAMPLE_KAISER_BETA: f64 = 5.0;
 pub(super) type PreUpsampleCoefficients = Box<[[f32; PRE_UPSAMPLE_TAPS]]>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,37 +163,57 @@ pub(super) fn pre_upsample_sample(
     sum
 }
 
-/// Builds a 24-tap polyphase FIR bank for band-limited pre-upsampling.
+/// Builds a 64-tap polyphase FIR bank for band-limited pre-upsampling.
 ///
-/// Each active phase is a Hann-windowed sinc fractional-delay filter. Phase
-/// zero is an impulse so that samples already present in the input are copied
-/// exactly, while phase `p` reconstructs the sample at the fractional offset
-/// `p / factor`. Every interpolating phase is normalized to unity DC gain.
+/// Each active phase is a Kaiser-windowed sinc fractional-delay filter. The
+/// beta of 5 keeps the transition narrow enough to preserve fractional-delay
+/// magnitude within 0.04 dB through 95% of Nyquist. Phase zero is an impulse so
+/// that samples already present in the input are copied exactly, while phase `p`
+/// reconstructs the sample at the fractional offset `p / factor`. Every
+/// interpolating phase is normalized to unity DC gain.
 ///
 /// The returned bank contains exactly `factor` phases.
 pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
     let mut coefficients = vec![[0.0; PRE_UPSAMPLE_TAPS]; factor].into_boxed_slice();
     coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
+    let kaiser_denominator = modified_bessel_i0(PRE_UPSAMPLE_KAISER_BETA);
 
     for (i_phase, phase_coefficients) in coefficients.iter_mut().enumerate().skip(1) {
-        let fraction = i_phase as f32 / factor as f32;
-        let mut normalization = 0.0_f32;
+        let fraction = i_phase as f64 / factor as f64;
+        let mut normalization = 0.0_f64;
         for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
-            let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f32;
-            let sinc = (std::f32::consts::PI * distance).sin() / (std::f32::consts::PI * distance);
-            let window = 0.5
-                * (1.0
-                    + (std::f32::consts::PI * distance / (PRE_UPSAMPLE_TAPS as f32 / 2.0)).cos());
+            let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f64;
+            let sinc = (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance);
+            let window_position = distance / (PRE_UPSAMPLE_TAPS as f64 / 2.0);
+            let window = modified_bessel_i0(
+                PRE_UPSAMPLE_KAISER_BETA * (1.0 - window_position * window_position).sqrt(),
+            ) / kaiser_denominator;
             let value = sinc * window;
-            *coefficient = value;
+            *coefficient = value as f32;
             normalization += value;
         }
         for coefficient in phase_coefficients {
-            *coefficient /= normalization;
+            *coefficient = (*coefficient as f64 / normalization) as f32;
         }
     }
     coefficients
+}
+
+fn modified_bessel_i0(value: f64) -> f64 {
+    let squared_quarter = value * value / 4.0;
+    let mut sum = 1.0;
+    let mut term = 1.0;
+
+    for order in 1..=32 {
+        term *= squared_quarter / (order * order) as f64;
+        sum += term;
+        if term <= sum * f64::EPSILON {
+            break;
+        }
+    }
+
+    sum
 }
 
 pub(super) fn reduce_upsampled_peaks(upsampled_peaks: &[f32], factor: usize) -> Vec<f32> {
@@ -392,14 +413,14 @@ mod tests {
 
     #[test]
     fn constant_signal_has_unity_gain_away_from_boundaries() {
-        let audio = vec![1.0; 128];
+        let audio = vec![1.0; 3 * PRE_UPSAMPLE_TAPS];
         for sample_rate in [
             8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
             176_400, 192_000,
         ] {
             let peaks =
                 collect_true_peaks(&audio, 1, sample_rate, AudioLayout::Interleaved).unwrap();
-            for peak in &peaks[24..audio.len() - 24] {
+            for peak in &peaks[PRE_UPSAMPLE_TAPS..audio.len() - PRE_UPSAMPLE_TAPS] {
                 assert!(
                     (*peak - 1.0).abs() < 0.002,
                     "sample_rate={sample_rate}, peak={peak}"
@@ -470,6 +491,34 @@ mod tests {
         for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
             let config = PeakConfig::new(sample_rate, true).unwrap();
             assert!(!matches!(config, PeakConfig::PreUpsampled { .. }));
+        }
+    }
+
+    #[test]
+    fn pre_upsample_fractional_phases_are_flat_through_95_percent_nyquist() {
+        for factor in [2, 3, 4, 6] {
+            let coefficients = build_pre_upsample_coefficients(factor);
+            for (i_phase, phase_coefficients) in coefficients.iter().enumerate().skip(1) {
+                for i_frequency in 0..=950 {
+                    let frequency = i_frequency as f64 / 1000.0;
+                    let angular_frequency = std::f64::consts::PI * frequency;
+                    let mut real = 0.0;
+                    let mut imaginary = 0.0;
+
+                    for (tap, &coefficient) in phase_coefficients.iter().enumerate() {
+                        let position = tap as isize - PRE_UPSAMPLE_CENTER as isize;
+                        let angle = angular_frequency * position as f64;
+                        real += coefficient as f64 * angle.cos();
+                        imaginary += coefficient as f64 * angle.sin();
+                    }
+
+                    let magnitude_db = 20.0 * real.hypot(imaginary).log10();
+                    assert!(
+                        magnitude_db.abs() < 0.04,
+                        "factor={factor}, phase={i_phase}, frequency={frequency}, magnitude_db={magnitude_db}"
+                    );
+                }
+            }
         }
     }
 

@@ -5,7 +5,7 @@ use crate::{LimiterError, layout::validate_layout};
 use super::{
     CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_ADDITIONAL_PHASES, InterpolationFactor,
     PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
-    interpolated_peak_at_frame, pre_upsample_interior_bounds, pre_upsample_sample,
+    calc_interpolated_peak_at_frame, calc_pre_upsample_interior_bounds, pre_upsample_sample,
     reduce_upsampled_peaks, validate_finite_samples,
 };
 
@@ -89,7 +89,7 @@ fn collect_boundary_peaks(
     interpolation: InterpolationFactor,
 ) {
     for i_frame in frames {
-        let peak = interpolated_peak_at_frame(
+        let peak = calc_interpolated_peak_at_frame(
             |source_frame| channel_audio[source_frame],
             channel_audio.len(),
             i_frame,
@@ -157,7 +157,7 @@ fn pre_upsample(
     let upsampled_frame_count = frame_count * factor;
     let mut upsampled = vec![0.0; audio.len() * factor];
     let mut phase_output = vec![0.0; frame_count];
-    let (interior_start, interior_end) = pre_upsample_interior_bounds(frame_count);
+    let (interior_start, interior_end) = calc_pre_upsample_interior_bounds(frame_count);
 
     for i_channel in 0..channels {
         let input_offset = i_channel * frame_count;
@@ -229,7 +229,7 @@ mod tests {
             let channel_offset = i_channel * frame_count;
             let channel_audio = &audio[channel_offset..channel_offset + frame_count];
             for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
-                let peak = interpolated_peak_at_frame(
+                let peak = calc_interpolated_peak_at_frame(
                     |source_frame| channel_audio[source_frame],
                     frame_count,
                     i_frame,
@@ -293,7 +293,7 @@ mod tests {
     fn pre_upsampling_preserves_original_samples() {
         let audio = [0.25, -0.5, 0.75, -1.0];
         for factor in [2, 3, 4, 6] {
-            let coefficients = super::super::pre_upsample_coefficients(factor);
+            let coefficients = super::super::build_pre_upsample_coefficients(factor);
             let upsampled = pre_upsample(&audio, 1, audio.len(), &coefficients);
             let original_phases: Vec<_> = upsampled.iter().step_by(factor).copied().collect();
             assert_eq!(original_phases, audio);
@@ -340,7 +340,7 @@ mod tests {
                     .collect();
                 let audio: Vec<_> = channel_samples.into_iter().flatten().collect();
                 for factor in [2, 3, 4, 6] {
-                    let coefficients = super::super::pre_upsample_coefficients(factor);
+                    let coefficients = super::super::build_pre_upsample_coefficients(factor);
                     assert_eq!(
                         pre_upsample(&audio, channels, frame_count, &coefficients),
                         pre_upsample_reference(&audio, channels, frame_count, &coefficients),

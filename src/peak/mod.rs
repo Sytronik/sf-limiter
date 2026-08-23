@@ -53,8 +53,13 @@ pub(super) enum InterpolationFactor {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PeakConfig {
+    /// sample-peak collection without true-peak estimation
     SamplePeak,
+
+    /// true-peak estimation using a polyphase FIR from BS.1770
     Interpolated(InterpolationFactor),
+
+    /// true-peak estimation using a polyphase FIR from BS.1770 with pre-upsampling
     PreUpsampled {
         interpolation: InterpolationFactor,
         coefficients: PreUpsampleCoefficients,
@@ -87,7 +92,7 @@ impl PeakConfig {
     fn pre_upsampled(factor: usize, interpolation: InterpolationFactor) -> Self {
         Self::PreUpsampled {
             interpolation,
-            coefficients: pre_upsample_coefficients(factor),
+            coefficients: build_pre_upsample_coefficients(factor),
         }
     }
 
@@ -104,7 +109,7 @@ impl PeakConfig {
     }
 }
 
-pub(super) fn pre_upsample_interior_bounds(frame_count: usize) -> (usize, usize) {
+pub(super) fn calc_pre_upsample_interior_bounds(frame_count: usize) -> (usize, usize) {
     if frame_count < PRE_UPSAMPLE_TAPS {
         (frame_count, frame_count)
     } else {
@@ -115,7 +120,7 @@ pub(super) fn pre_upsample_interior_bounds(frame_count: usize) -> (usize, usize)
     }
 }
 
-pub(super) fn interpolated_peak_at_frame(
+pub(super) fn calc_interpolated_peak_at_frame(
     mut sample_at: impl FnMut(usize) -> f32,
     frame_count: usize,
     frame: usize,
@@ -165,7 +170,7 @@ pub(super) fn pre_upsample_sample(
 /// `p / factor`. Every interpolating phase is normalized to unity DC gain.
 ///
 /// The returned bank contains exactly `factor` phases.
-pub(super) fn pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
+pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
     let mut coefficients = vec![[0.0; PRE_UPSAMPLE_TAPS]; factor].into_boxed_slice();
     coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
@@ -291,7 +296,7 @@ mod tests {
         let audio = [0.25, -0.5, 0.75, -1.0];
 
         let mut accessed_frames = Vec::new();
-        let leading_peak = interpolated_peak_at_frame(
+        let leading_peak = calc_interpolated_peak_at_frame(
             |source_frame| {
                 accessed_frames.push(source_frame);
                 audio[source_frame]
@@ -306,7 +311,7 @@ mod tests {
         assert_eq!(accessed_frames, [0, 1, 2, 3]);
 
         accessed_frames.clear();
-        let trailing_peak = interpolated_peak_at_frame(
+        let trailing_peak = calc_interpolated_peak_at_frame(
             |source_frame| {
                 accessed_frames.push(source_frame);
                 audio[source_frame]
@@ -459,7 +464,7 @@ mod tests {
             let PeakConfig::PreUpsampled { coefficients, .. } = config else {
                 panic!("sample_rate={sample_rate} did not select pre-upsampling");
             };
-            assert_eq!(coefficients, pre_upsample_coefficients(factor));
+            assert_eq!(coefficients, build_pre_upsample_coefficients(factor));
         }
 
         for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {

@@ -1,7 +1,10 @@
+use std::ops::Range;
+
 use crate::{LimiterError, layout::validate_layout};
 
 use super::{
-    InterpolationFactor, PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig,
+    CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_ADDITIONAL_PHASES, InterpolationFactor,
+    PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
     interpolated_peak_at_frame, pre_upsample_interior_bounds, pre_upsample_sample,
     reduce_upsampled_peaks, validate_finite_samples,
 };
@@ -37,7 +40,57 @@ fn collect_interpolated_peaks(
 ) -> Result<Vec<f32>, LimiterError> {
     let mut frame_peaks = collect_sample_peaks(audio, channels)?;
     let frame_count = frame_peaks.len();
-    for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
+
+    if channels < 4 || frame_count < FIR_TAP_COUNT {
+        collect_boundary_peaks(
+            audio,
+            &mut frame_peaks,
+            channels,
+            0..frame_count,
+            interpolation,
+        );
+        return Ok(frame_peaks);
+    }
+
+    // Complete FIR windows use a channel-contiguous loop so LLVM can
+    // vectorize across channels. Edge frames retain the scalar zero-padding
+    // path because some taps are outside the signal.
+    collect_boundary_peaks(
+        audio,
+        &mut frame_peaks,
+        channels,
+        0..CENTER_TAP,
+        interpolation,
+    );
+    let trailing_start = frame_count - TRAILING_BOUNDARY_FRAMES;
+    collect_boundary_peaks(
+        audio,
+        &mut frame_peaks,
+        channels,
+        trailing_start..frame_count,
+        interpolation,
+    );
+
+    for phase in TWO_X_PHASES {
+        convolve_phase(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
+    }
+    if interpolation == InterpolationFactor::Four {
+        for phase in FOUR_X_ADDITIONAL_PHASES {
+            convolve_phase(audio, &mut frame_peaks, channels, &COEFFICIENTS[phase]);
+        }
+    }
+    Ok(frame_peaks)
+}
+
+fn collect_boundary_peaks(
+    audio: &[f32],
+    frame_peaks: &mut [f32],
+    channels: usize,
+    frames: Range<usize>,
+    interpolation: InterpolationFactor,
+) {
+    let frame_count = frame_peaks.len();
+    for i_frame in frames {
         for i_channel in 0..channels {
             let peak = interpolated_peak_at_frame(
                 |source_frame| audio[source_frame * channels + i_channel],
@@ -45,10 +98,47 @@ fn collect_interpolated_peaks(
                 i_frame,
                 interpolation,
             );
-            *frame_peak = frame_peak.max(peak);
+            frame_peaks[i_frame] = frame_peaks[i_frame].max(peak);
         }
     }
-    Ok(frame_peaks)
+}
+
+// Each FIR tap addresses a contiguous channel span. Keeping the tap expression
+// fixed lets LLVM vectorize this loop across channels without changing the
+// floating-point accumulation order within a channel.
+#[inline(never)]
+fn convolve_phase(
+    audio: &[f32],
+    frame_peaks: &mut [f32],
+    channels: usize,
+    coefficients: &[f32; FIR_TAP_COUNT],
+) {
+    debug_assert_eq!(audio.len(), frame_peaks.len() * channels);
+    debug_assert!(channels >= 4);
+    debug_assert!(frame_peaks.len() >= FIR_TAP_COUNT);
+
+    let interior_len = frame_peaks.len() - (FIR_TAP_COUNT - 1);
+    for i_window in 0..interior_len {
+        let window_start = i_window * channels;
+        let window = &audio[window_start..window_start + FIR_TAP_COUNT * channels];
+        let mut peak = frame_peaks[i_window + CENTER_TAP];
+        for i_channel in 0..channels {
+            let sum = window[i_channel] * coefficients[11]
+                + window[channels + i_channel] * coefficients[10]
+                + window[2 * channels + i_channel] * coefficients[9]
+                + window[3 * channels + i_channel] * coefficients[8]
+                + window[4 * channels + i_channel] * coefficients[7]
+                + window[5 * channels + i_channel] * coefficients[6]
+                + window[6 * channels + i_channel] * coefficients[5]
+                + window[7 * channels + i_channel] * coefficients[4]
+                + window[8 * channels + i_channel] * coefficients[3]
+                + window[9 * channels + i_channel] * coefficients[2]
+                + window[10 * channels + i_channel] * coefficients[1]
+                + window[11 * channels + i_channel] * coefficients[0];
+            peak = peak.max(sum.abs());
+        }
+        frame_peaks[i_window + CENTER_TAP] = peak;
+    }
 }
 
 fn collect_sample_peaks(audio: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
@@ -175,6 +265,27 @@ fn pre_upsample_boundary_frame(
 mod tests {
     use super::*;
 
+    fn collect_interpolated_peaks_scalar_reference(
+        audio: &[f32],
+        channels: usize,
+        interpolation: InterpolationFactor,
+    ) -> Vec<f32> {
+        let mut frame_peaks = collect_sample_peaks(audio, channels).unwrap();
+        let frame_count = frame_peaks.len();
+        for (i_frame, frame_peak) in frame_peaks.iter_mut().enumerate() {
+            for i_channel in 0..channels {
+                let peak = interpolated_peak_at_frame(
+                    |source_frame| audio[source_frame * channels + i_channel],
+                    frame_count,
+                    i_frame,
+                    interpolation,
+                );
+                *frame_peak = frame_peak.max(peak);
+            }
+        }
+        frame_peaks
+    }
+
     fn pre_upsample_reference(
         audio: &[f32],
         channels: usize,
@@ -196,12 +307,36 @@ mod tests {
     }
 
     #[test]
+    fn vectorizable_interpolation_matches_scalar_reference() {
+        for channels in [1, 2, 3, 4, 5, 8] {
+            for frame_count in [0, 1, 11, 12, 13, 257] {
+                let audio: Vec<_> = (0..frame_count * channels)
+                    .map(|i_sample| {
+                        ((i_sample as f64 * 0.731).sin() + (i_sample as f64 * 0.193).cos()) as f32
+                    })
+                    .collect();
+                for interpolation in [InterpolationFactor::Two, InterpolationFactor::Four] {
+                    assert_eq!(
+                        collect_interpolated_peaks(&audio, channels, interpolation).unwrap(),
+                        collect_interpolated_peaks_scalar_reference(
+                            &audio,
+                            channels,
+                            interpolation,
+                        ),
+                        "channels={channels}, frame_count={frame_count}, interpolation={interpolation:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vectorizable_pre_upsampling_matches_scalar_reference() {
         for channels in [1, 2, 3, 4, 8] {
             for frame_count in [0, 1, 11, 12, 23, 24, 25, 257] {
                 let audio: Vec<_> = (0..frame_count * channels)
-                    .map(|index| {
-                        ((index as f64 * 0.731).sin() + (index as f64 * 0.193).cos()) as f32
+                    .map(|i_sample| {
+                        ((i_sample as f64 * 0.731).sin() + (i_sample as f64 * 0.193).cos()) as f32
                     })
                     .collect();
                 for factor in [2, 3, 4, 6] {

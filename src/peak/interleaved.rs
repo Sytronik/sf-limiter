@@ -319,9 +319,15 @@ fn convolve_mirrored_phase_frame(
     let mirror_phase = factor - i_phase;
     let out_start = (i_frame * factor + i_phase) * channels;
     let mirror_out_start = (i_frame * factor + mirror_phase) * channels;
-    let (primary_out, mirror_out) = upsampled.split_at_mut(mirror_out_start);
-    let primary_out = &mut primary_out[out_start..out_start + channels];
-    let mirror_out = &mut mirror_out[..channels];
+    let [primary_out, mirror_out] = upsampled
+        .get_disjoint_mut([
+            out_start..out_start + channels,
+            mirror_out_start..mirror_out_start + channels,
+        ])
+        .expect(
+            "The output slices for the primary and mirror phases must not overlap. \
+            Check the calculation of out_start and mirror_out_start.",
+        );
 
     for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
         let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;

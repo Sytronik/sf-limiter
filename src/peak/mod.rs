@@ -321,8 +321,18 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
             }
         }
 
-        let mirror_phase = factor - i_phase;
-        if mirror_phase == i_phase {
+        let i_mirror_phase = factor - i_phase;
+        if let Ok([phase_coefficients, mirror_coefficients]) =
+            coefficients.get_disjoint_mut([i_phase, i_mirror_phase])
+        {
+            for (coefficient, &source) in mirror_coefficients
+                .iter_mut()
+                .zip(phase_coefficients.iter().rev())
+            {
+                *coefficient = source;
+            }
+        } else {
+            debug_assert_eq!(i_mirror_phase, i_phase);
             for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
                 let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
                 let coefficient =
@@ -333,16 +343,6 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
             let normalization: f32 = coefficients[i_phase].iter().sum();
             for coefficient in &mut coefficients[i_phase] {
                 *coefficient /= normalization;
-            }
-        } else {
-            let (primary_phases, mirror_phases) = coefficients.split_at_mut(mirror_phase);
-            let phase_coefficients = &primary_phases[i_phase];
-            let mirror_coefficients = &mut mirror_phases[0];
-            for (coefficient, &source) in mirror_coefficients
-                .iter_mut()
-                .zip(phase_coefficients.iter().rev())
-            {
-                *coefficient = source;
             }
         }
     }

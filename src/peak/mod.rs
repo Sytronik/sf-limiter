@@ -1,161 +1,23 @@
 //! Sample-peak collection and ITU-R BS.1770-5 Annex 2 true-peak estimation.
 
-// Keep the fixed tap expressions explicit so LLVM can vectorize the independent
-// outer channel or frame loops without relying on nested-loop transformations.
-macro_rules! convolve_fir_12 {
-    (|$tap:ident| $sample:expr, $coefficients:expr $(,)?) => {{
-        let coefficients = $coefficients;
-        let mut sum = {
-            let $tap = 0_usize;
-            $sample * coefficients[11]
-        };
-        {
-            let $tap = 1_usize;
-            sum += $sample * coefficients[10];
-        }
-        {
-            let $tap = 2_usize;
-            sum += $sample * coefficients[9];
-        }
-        {
-            let $tap = 3_usize;
-            sum += $sample * coefficients[8];
-        }
-        {
-            let $tap = 4_usize;
-            sum += $sample * coefficients[7];
-        }
-        {
-            let $tap = 5_usize;
-            sum += $sample * coefficients[6];
-        }
-        {
-            let $tap = 6_usize;
-            sum += $sample * coefficients[5];
-        }
-        {
-            let $tap = 7_usize;
-            sum += $sample * coefficients[4];
-        }
-        {
-            let $tap = 8_usize;
-            sum += $sample * coefficients[3];
-        }
-        {
-            let $tap = 9_usize;
-            sum += $sample * coefficients[2];
-        }
-        {
-            let $tap = 10_usize;
-            sum += $sample * coefficients[1];
-        }
-        {
-            let $tap = 11_usize;
-            sum += $sample * coefficients[0];
-        }
-        sum
-    }};
-}
-
-macro_rules! convolve_mirrored_fir_12 {
-    (|$tap:ident| $sample:expr, $coefficient_pairs:expr $(,)?) => {{
-        let coefficient_pairs = $coefficient_pairs;
-        let (common_0, differential_0) = calc_mirrored_terms(
-            {
-                let $tap = 0_usize;
-                $sample
-            },
-            {
-                let $tap = 11_usize;
-                $sample
-            },
-            coefficient_pairs[0].0,
-            coefficient_pairs[0].1,
-        );
-        let (common_1, differential_1) = calc_mirrored_terms(
-            {
-                let $tap = 1_usize;
-                $sample
-            },
-            {
-                let $tap = 10_usize;
-                $sample
-            },
-            coefficient_pairs[1].0,
-            coefficient_pairs[1].1,
-        );
-        let (common_2, differential_2) = calc_mirrored_terms(
-            {
-                let $tap = 2_usize;
-                $sample
-            },
-            {
-                let $tap = 9_usize;
-                $sample
-            },
-            coefficient_pairs[2].0,
-            coefficient_pairs[2].1,
-        );
-        let (common_3, differential_3) = calc_mirrored_terms(
-            {
-                let $tap = 3_usize;
-                $sample
-            },
-            {
-                let $tap = 8_usize;
-                $sample
-            },
-            coefficient_pairs[3].0,
-            coefficient_pairs[3].1,
-        );
-        let (common_4, differential_4) = calc_mirrored_terms(
-            {
-                let $tap = 4_usize;
-                $sample
-            },
-            {
-                let $tap = 7_usize;
-                $sample
-            },
-            coefficient_pairs[4].0,
-            coefficient_pairs[4].1,
-        );
-        let (common_5, differential_5) = calc_mirrored_terms(
-            {
-                let $tap = 5_usize;
-                $sample
-            },
-            {
-                let $tap = 6_usize;
-                $sample
-            },
-            coefficient_pairs[5].0,
-            coefficient_pairs[5].1,
-        );
-        let common_sum = common_0 + common_1 + common_2 + common_3 + common_4 + common_5;
-        let differential_sum = differential_0
-            + differential_1
-            + differential_2
-            + differential_3
-            + differential_4
-            + differential_5;
-        let sample = common_sum + differential_sum;
-        let mirror_sample = common_sum - differential_sum;
-        (sample, mirror_sample)
-    }};
-}
-
+mod convolve;
 mod interleaved;
 mod planar;
 
+use std::ops::Deref;
+
 use crate::{LimiterError, layout::AudioLayout};
 
-const FIR_PHASE_COUNT: usize = 4;
-pub(super) const FIR_TAP_COUNT: usize = 12;
-pub(super) const CENTER_TAP: usize = FIR_TAP_COUNT / 2;
-pub(super) const TRAILING_BOUNDARY_FRAMES: usize = FIR_TAP_COUNT - CENTER_TAP - 1;
-pub(super) const TWO_X_PHASES: [usize; 2] = [0, FIR_PHASE_COUNT / 2];
-pub(super) const FOUR_X_MIRRORED_PHASES: [usize; 2] = [0, 1];
+use convolve::{
+    convolve_mirrored_samples_with_pairs, convolve_scalar, decompose_mirrored_coefficients,
+};
+
+const BS1770_PHASE_COUNT: usize = 4;
+pub(super) const BS1770_N_TAPS: usize = 12;
+pub(super) const BS1770_CENTER_TAP: usize = BS1770_N_TAPS / 2;
+pub(super) const BS1770_TRAILING_BOUNDARY_FRAMES: usize = BS1770_N_TAPS - BS1770_CENTER_TAP - 1;
+pub(super) const BS1770_2X_PHASES: [usize; 2] = [0, BS1770_PHASE_COUNT / 2];
+pub(super) const BS1770_4X_MIRRORED_PHASES: [usize; 2] = [0, 1];
 
 // The order-48, four-phase FIR interpolator published in BS.1770-5. Coefficients
 // are phase-major so the planar hot loop can convolve consecutive frames with
@@ -163,7 +25,7 @@ pub(super) const FOUR_X_MIRRORED_PHASES: [usize; 2] = [0, 1];
 // representable as f32.
 #[allow(clippy::excessive_precision)]
 #[rustfmt::skip]
-pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
+pub(super) const BS1770_COEFFICIENTS: [[f32; BS1770_N_TAPS]; BS1770_PHASE_COUNT] = [
     [
          0.0017089843750,  0.0109863281250, -0.0196533203125,  0.0332031250000,
         -0.0594482421875,  0.1373291015625,  0.9721679687500, -0.1022949218750,
@@ -186,10 +48,89 @@ pub(super) const COEFFICIENTS: [[f32; FIR_TAP_COUNT]; FIR_PHASE_COUNT] = [
     ],
 ];
 
-pub(super) const PRE_UPSAMPLE_TAPS: usize = 64;
-pub(super) const PRE_UPSAMPLE_CENTER: usize = PRE_UPSAMPLE_TAPS / 2 - 1;
+const fn decompose_bs1770_coefficients(
+    coefficients: &[f32; BS1770_N_TAPS],
+) -> [(f32, f32); BS1770_N_TAPS / 2] {
+    let mut coeff_pairs = [(0.0, 0.0); BS1770_N_TAPS / 2];
+    let mut tap = 0;
+    while tap < BS1770_N_TAPS / 2 {
+        let coefficient = coefficients[tap];
+        let mirror_coefficient = coefficients[BS1770_N_TAPS - 1 - tap];
+        coeff_pairs[tap] = decompose_mirrored_coefficients(coefficient, mirror_coefficient);
+        tap += 1;
+    }
+    coeff_pairs
+}
+
+pub(super) const BS1770_MIRRORED_COEFFS: [[(f32, f32); BS1770_N_TAPS / 2];
+    BS1770_4X_MIRRORED_PHASES.len()] = [
+    decompose_bs1770_coefficients(&BS1770_COEFFICIENTS[BS1770_4X_MIRRORED_PHASES[0]]),
+    decompose_bs1770_coefficients(&BS1770_COEFFICIENTS[BS1770_4X_MIRRORED_PHASES[1]]),
+];
+
+pub(super) const PRE_UPSAMPLE_N_TAPS: usize = 64;
+pub(super) const PRE_UPSAMPLE_CENTER_TAP: usize = PRE_UPSAMPLE_N_TAPS / 2 - 1;
 const PRE_UPSAMPLE_KAISER_BETA: f64 = 5.0;
-pub(super) type PreUpsampleCoefficients = Box<[[f32; PRE_UPSAMPLE_TAPS]]>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PreUpsampleCoefficients {
+    phases: Box<[[f32; PRE_UPSAMPLE_N_TAPS]]>,
+    mirrored_phases: Box<[[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2]]>,
+}
+
+impl PreUpsampleCoefficients {
+    fn new(phases: Box<[[f32; PRE_UPSAMPLE_N_TAPS]]>) -> Self {
+        let mirrored_phases = phases
+            .iter()
+            .take(phases.len().div_ceil(2))
+            .skip(1)
+            .map(|phase| {
+                std::array::from_fn(|tap| {
+                    decompose_mirrored_coefficients(
+                        phase[tap],
+                        phase[PRE_UPSAMPLE_N_TAPS - 1 - tap],
+                    )
+                })
+            })
+            .collect();
+        Self {
+            phases,
+            mirrored_phases,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.phases.len()
+    }
+
+    fn phase(&self, i_phase: usize) -> &[f32; PRE_UPSAMPLE_N_TAPS] {
+        &self.phases[i_phase]
+    }
+
+    fn mirrored_phases(
+        &self,
+    ) -> impl Iterator<Item = (usize, &[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2])> {
+        self.mirrored_phases
+            .iter()
+            .enumerate()
+            .map(|(i_phase, coeff_pairs)| (i_phase + 1, coeff_pairs))
+    }
+
+    fn symmetric_phase(&self) -> Option<(usize, &[f32; PRE_UPSAMPLE_N_TAPS])> {
+        self.len().is_multiple_of(2).then(|| {
+            let i_phase = self.len() / 2;
+            (i_phase, self.phase(i_phase))
+        })
+    }
+}
+
+impl Deref for PreUpsampleCoefficients {
+    type Target = [[f32; PRE_UPSAMPLE_N_TAPS]];
+
+    fn deref(&self) -> &Self::Target {
+        &self.phases
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InterpolationFactor {
@@ -256,12 +197,12 @@ impl PeakConfig {
 }
 
 pub(super) fn calc_pre_upsample_interior_bounds(frame_count: usize) -> (usize, usize) {
-    if frame_count < PRE_UPSAMPLE_TAPS {
+    if frame_count < PRE_UPSAMPLE_N_TAPS {
         (frame_count, frame_count)
     } else {
         (
-            PRE_UPSAMPLE_CENTER,
-            frame_count - (PRE_UPSAMPLE_TAPS - PRE_UPSAMPLE_CENTER - 1),
+            PRE_UPSAMPLE_CENTER_TAP,
+            frame_count - (PRE_UPSAMPLE_N_TAPS - PRE_UPSAMPLE_CENTER_TAP - 1),
         )
     }
 }
@@ -274,8 +215,8 @@ pub(super) fn calc_interpolated_peak_at_frame(
 ) -> f32 {
     // An even-length FIR window spans six frames before this frame and five after it.
     // Samples beyond either signal boundary are zero-padded.
-    let samples: [f32; FIR_TAP_COUNT] = std::array::from_fn(|tap| {
-        let i_src_frame = i_frame as isize + tap as isize - CENTER_TAP as isize;
+    let samples: [f32; BS1770_N_TAPS] = std::array::from_fn(|tap| {
+        let i_src_frame = i_frame as isize + tap as isize - BS1770_CENTER_TAP as isize;
         if let Ok(i_src_frame) = usize::try_from(i_src_frame)
             && i_src_frame < frame_count
         {
@@ -297,8 +238,8 @@ pub(super) fn calc_interpolated_peak_at_frame_reference(
     frame_count: usize,
     interpolation: InterpolationFactor,
 ) -> f32 {
-    let samples: [f32; FIR_TAP_COUNT] = std::array::from_fn(|tap| {
-        let source_frame = i_frame as isize + tap as isize - CENTER_TAP as isize;
+    let samples: [f32; BS1770_N_TAPS] = std::array::from_fn(|tap| {
+        let source_frame = i_frame as isize + tap as isize - BS1770_CENTER_TAP as isize;
         if let Ok(source_frame) = usize::try_from(source_frame)
             && source_frame < frame_count
         {
@@ -308,12 +249,12 @@ pub(super) fn calc_interpolated_peak_at_frame_reference(
         }
     });
     let phases: &[usize] = match interpolation {
-        InterpolationFactor::Two => &TWO_X_PHASES,
+        InterpolationFactor::Two => &BS1770_2X_PHASES,
         InterpolationFactor::Four => &[0, 1, 2, 3],
     };
     phases
         .iter()
-        .map(|&phase| convolve_scalar(&samples, &COEFFICIENTS[phase]).abs())
+        .map(|&phase| convolve_scalar(&samples, &BS1770_COEFFICIENTS[phase]).abs())
         .fold(0.0, f32::max)
 }
 
@@ -322,11 +263,11 @@ pub(super) fn pre_upsample_sample(
     mut sample_at: impl FnMut(usize) -> f32,
     i_frame: usize,
     frame_count: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coefficients: &[f32; PRE_UPSAMPLE_N_TAPS],
 ) -> f32 {
     let mut sum = 0.0_f32;
     for (tap, coefficient) in coefficients.iter().enumerate() {
-        let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
+        let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER_TAP as isize;
         if let Ok(i_src_frame) = usize::try_from(i_src_frame)
             && i_src_frame < frame_count
         {
@@ -340,11 +281,15 @@ pub(super) fn pre_upsample_symmetric_sample(
     mut sample_at: impl FnMut(usize) -> f32,
     i_frame: usize,
     frame_count: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coefficients: &[f32; PRE_UPSAMPLE_N_TAPS],
 ) -> f32 {
     let mut sum = 0.0_f32;
-    for (tap, &coefficient) in coefficients.iter().take(PRE_UPSAMPLE_TAPS / 2).enumerate() {
-        let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
+    for (tap, &coefficient) in coefficients
+        .iter()
+        .take(PRE_UPSAMPLE_N_TAPS / 2)
+        .enumerate()
+    {
+        let mirror_tap = PRE_UPSAMPLE_N_TAPS - 1 - tap;
         let input = pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, tap);
         let mirror_input =
             pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, mirror_tap);
@@ -357,59 +302,12 @@ pub(super) fn pre_upsample_mirrored_samples(
     mut sample_at: impl FnMut(usize) -> f32,
     i_frame: usize,
     frame_count: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coeff_pairs: &[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2],
 ) -> (f32, f32) {
-    convolve_mirrored_samples(
+    convolve_mirrored_samples_with_pairs(
         |tap| pre_upsample_source_sample(&mut sample_at, i_frame, frame_count, tap),
-        coefficients,
+        coeff_pairs,
     )
-}
-
-#[inline(always)]
-pub(super) fn decompose_mirrored_coefficients(
-    coefficient: f32,
-    mirror_coefficient: f32,
-) -> (f32, f32) {
-    (
-        (coefficient + mirror_coefficient) * 0.5,
-        (coefficient - mirror_coefficient) * 0.5,
-    )
-}
-
-#[inline(always)]
-pub(super) fn calc_mirrored_terms(
-    input: f32,
-    mirror_input: f32,
-    common_coefficient: f32,
-    differential_coefficient: f32,
-) -> (f32, f32) {
-    (
-        (input + mirror_input) * common_coefficient,
-        (input - mirror_input) * differential_coefficient,
-    )
-}
-
-pub(super) fn convolve_mirrored_samples<const TAPS: usize>(
-    mut sample_at: impl FnMut(usize) -> f32,
-    coefficients: &[f32; TAPS],
-) -> (f32, f32) {
-    debug_assert!(TAPS.is_multiple_of(2));
-    let mut primary_sum = 0.0_f32;
-    let mut mirror_sum = 0.0_f32;
-    for tap in 0..TAPS / 2 {
-        let mirror_tap = TAPS - 1 - tap;
-        let (common_coefficient, differential_coefficient) =
-            decompose_mirrored_coefficients(coefficients[tap], coefficients[mirror_tap]);
-        let (common, differential) = calc_mirrored_terms(
-            sample_at(tap),
-            sample_at(mirror_tap),
-            common_coefficient,
-            differential_coefficient,
-        );
-        primary_sum += common + differential;
-        mirror_sum += common - differential;
-    }
-    (primary_sum, mirror_sum)
 }
 
 fn pre_upsample_source_sample(
@@ -418,7 +316,7 @@ fn pre_upsample_source_sample(
     frame_count: usize,
     tap: usize,
 ) -> f32 {
-    let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER as isize;
+    let i_src_frame = i_frame as isize + tap as isize - PRE_UPSAMPLE_CENTER_TAP as isize;
     if let Ok(i_src_frame) = usize::try_from(i_src_frame)
         && i_src_frame < frame_count
     {
@@ -440,8 +338,8 @@ fn pre_upsample_source_sample(
 /// The returned bank contains exactly `factor` phases.
 pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoefficients {
     debug_assert!(matches!(factor, 2 | 3 | 4 | 6));
-    let mut coefficients = vec![[0.0; PRE_UPSAMPLE_TAPS]; factor].into_boxed_slice();
-    coefficients[0][PRE_UPSAMPLE_CENTER] = 1.0;
+    let mut coefficients = vec![[0.0; PRE_UPSAMPLE_N_TAPS]; factor].into_boxed_slice();
+    coefficients[0][PRE_UPSAMPLE_CENTER_TAP] = 1.0;
     let kaiser_denominator = modified_bessel_i0(PRE_UPSAMPLE_KAISER_BETA);
 
     for i_phase in 1..=factor / 2 {
@@ -450,10 +348,10 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
             let fraction = i_phase as f64 / factor as f64;
             let mut normalization = 0.0_f64;
             for (tap, coefficient) in phase_coefficients.iter_mut().enumerate() {
-                let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER as isize) as f64;
+                let distance = fraction - (tap as isize - PRE_UPSAMPLE_CENTER_TAP as isize) as f64;
                 let sinc =
                     (std::f64::consts::PI * distance).sin() / (std::f64::consts::PI * distance);
-                let window_position = distance / (PRE_UPSAMPLE_TAPS as f64 / 2.0);
+                let window_position = distance / (PRE_UPSAMPLE_N_TAPS as f64 / 2.0);
                 let window = modified_bessel_i0(
                     PRE_UPSAMPLE_KAISER_BETA * (1.0 - window_position * window_position).sqrt(),
                 ) / kaiser_denominator;
@@ -478,8 +376,8 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
             }
         } else {
             debug_assert_eq!(i_mirror_phase, i_phase);
-            for tap in 0..PRE_UPSAMPLE_TAPS / 2 {
-                let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
+            for tap in 0..PRE_UPSAMPLE_N_TAPS / 2 {
+                let mirror_tap = PRE_UPSAMPLE_N_TAPS - 1 - tap;
                 let coefficient =
                     (coefficients[i_phase][tap] + coefficients[i_phase][mirror_tap]) * 0.5;
                 coefficients[i_phase][tap] = coefficient;
@@ -491,7 +389,7 @@ pub(super) fn build_pre_upsample_coefficients(factor: usize) -> PreUpsampleCoeff
             }
         }
     }
-    coefficients
+    PreUpsampleCoefficients::new(coefficients)
 }
 
 fn modified_bessel_i0(value: f64) -> f64 {
@@ -517,32 +415,23 @@ pub(super) fn reduce_upsampled_peaks(upsampled_peaks: &[f32], factor: usize) -> 
         .collect()
 }
 
-fn interpolate_four_phases(samples: &[f32; FIR_TAP_COUNT]) -> f32 {
-    FOUR_X_MIRRORED_PHASES
-        .into_iter()
-        .flat_map(|phase| {
+fn interpolate_four_phases(samples: &[f32; BS1770_N_TAPS]) -> f32 {
+    BS1770_MIRRORED_COEFFS
+        .iter()
+        .flat_map(|coeff_pairs| {
             let (sample, mirror_sample) =
-                convolve_mirrored_samples(|tap| samples[tap], &COEFFICIENTS[phase]);
+                convolve_mirrored_samples_with_pairs(|tap| samples[tap], coeff_pairs);
             [sample.abs(), mirror_sample.abs()]
         })
         .fold(0.0, f32::max)
 }
 
 #[inline(always)]
-fn interpolate_two_phases(samples: &[f32; FIR_TAP_COUNT]) -> f32 {
-    TWO_X_PHASES
-        .map(|phase| convolve_scalar(samples, &COEFFICIENTS[phase]).abs())
+fn interpolate_two_phases(samples: &[f32; BS1770_N_TAPS]) -> f32 {
+    BS1770_2X_PHASES
         .into_iter()
+        .map(|phase| convolve_scalar(samples, &BS1770_COEFFICIENTS[phase]).abs())
         .fold(0.0, f32::max)
-}
-
-#[inline(always)]
-fn convolve_scalar(samples: &[f32; FIR_TAP_COUNT], coefficients: &[f32; FIR_TAP_COUNT]) -> f32 {
-    samples
-        .iter()
-        .zip(coefficients.iter().rev())
-        .map(|(sample, coefficient)| sample * coefficient)
-        .sum()
 }
 
 pub(super) fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError> {
@@ -555,6 +444,7 @@ pub(super) fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError>
 
 #[cfg(test)]
 mod tests {
+    use super::convolve::calc_mirrored_terms;
     use super::*;
 
     fn assert_close(actual: f32, expected: f32, context: &str) {
@@ -588,18 +478,41 @@ mod tests {
         PeakConfig::new(sample_rate, true)?.collect_frame_peaks(audio, channels, layout)
     }
 
-    fn scalar_peak(samples: &[f32; FIR_TAP_COUNT], phases: &[usize]) -> f32 {
+    fn scalar_peak(samples: &[f32; BS1770_N_TAPS], phases: &[usize]) -> f32 {
         phases
             .iter()
             .map(|&phase| {
                 samples
                     .iter()
-                    .zip(COEFFICIENTS[phase].iter().rev())
+                    .zip(BS1770_COEFFICIENTS[phase].iter().rev())
                     .map(|(sample, coefficient)| sample * coefficient)
                     .sum::<f32>()
                     .abs()
             })
             .fold(0.0, f32::max)
+    }
+
+    fn convolve_mirrored_samples<const TAPS: usize>(
+        mut sample_at: impl FnMut(usize) -> f32,
+        coefficients: &[f32; TAPS],
+    ) -> (f32, f32) {
+        debug_assert!(TAPS.is_multiple_of(2));
+        let mut primary_sum = 0.0_f32;
+        let mut mirror_sum = 0.0_f32;
+        for tap in 0..TAPS / 2 {
+            let mirror_tap = TAPS - 1 - tap;
+            let (common_coefficient, differential_coefficient) =
+                decompose_mirrored_coefficients(coefficients[tap], coefficients[mirror_tap]);
+            let (common, differential) = calc_mirrored_terms(
+                sample_at(tap),
+                sample_at(mirror_tap),
+                common_coefficient,
+                differential_coefficient,
+            );
+            primary_sum += common + differential;
+            mirror_sum += common - differential;
+        }
+        (primary_sum, mirror_sum)
     }
 
     #[test]
@@ -638,10 +551,10 @@ mod tests {
             assert_close(mirror_sample, expected_mirror, "reversed coefficient order");
         }
 
-        let bs_1770_samples = std::array::from_fn(|tap| {
+        let bs1770_samples = std::array::from_fn(|tap| {
             ((tap as f64 * 0.731).sin() + (tap as f64 * 0.193).cos()) as f32
         });
-        check(&bs_1770_samples, &COEFFICIENTS[0]);
+        check(&bs1770_samples, &BS1770_COEFFICIENTS[0]);
 
         let pre_upsample_samples = std::array::from_fn(|tap| {
             ((tap as f64 * 0.417).sin() - (tap as f64 * 0.271).cos()) as f32
@@ -652,18 +565,18 @@ mod tests {
 
     #[test]
     fn scalar_convolution_uses_fir_time_order() {
-        let mut samples = [0.0; FIR_TAP_COUNT];
-        samples[FIR_TAP_COUNT - 1] = 1.0;
-        for coefficients in &COEFFICIENTS {
+        let mut samples = [0.0; BS1770_N_TAPS];
+        samples[BS1770_N_TAPS - 1] = 1.0;
+        for coefficients in &BS1770_COEFFICIENTS {
             assert_eq!(convolve_scalar(&samples, coefficients), coefficients[0]);
         }
 
-        samples = [0.0; FIR_TAP_COUNT];
+        samples = [0.0; BS1770_N_TAPS];
         samples[0] = 1.0;
-        for coefficients in &COEFFICIENTS {
+        for coefficients in &BS1770_COEFFICIENTS {
             assert_eq!(
                 convolve_scalar(&samples, coefficients),
-                coefficients[FIR_TAP_COUNT - 1]
+                coefficients[BS1770_N_TAPS - 1]
             );
         }
     }
@@ -682,8 +595,8 @@ mod tests {
             audio.len(),
             InterpolationFactor::Four,
         );
-        let mut leading_window = [0.0; FIR_TAP_COUNT];
-        leading_window[CENTER_TAP..CENTER_TAP + audio.len()].copy_from_slice(&audio);
+        let mut leading_window = [0.0; BS1770_N_TAPS];
+        leading_window[BS1770_CENTER_TAP..BS1770_CENTER_TAP + audio.len()].copy_from_slice(&audio);
         assert_close(
             leading_peak,
             scalar_peak(&leading_window, &[0, 1, 2, 3]),
@@ -701,8 +614,8 @@ mod tests {
             audio.len(),
             InterpolationFactor::Four,
         );
-        let mut trailing_window = [0.0; FIR_TAP_COUNT];
-        let trailing_start = CENTER_TAP + 1 - audio.len();
+        let mut trailing_window = [0.0; BS1770_N_TAPS];
+        let trailing_start = BS1770_CENTER_TAP + 1 - audio.len();
         trailing_window[trailing_start..trailing_start + audio.len()].copy_from_slice(&audio);
         assert_close(
             trailing_peak,
@@ -777,14 +690,14 @@ mod tests {
 
     #[test]
     fn constant_signal_has_unity_gain_away_from_boundaries() {
-        let audio = vec![1.0; 3 * PRE_UPSAMPLE_TAPS];
+        let audio = vec![1.0; 3 * PRE_UPSAMPLE_N_TAPS];
         for sample_rate in [
             8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
             176_400, 192_000,
         ] {
             let peaks =
                 collect_true_peaks(&audio, 1, sample_rate, AudioLayout::Interleaved).unwrap();
-            for peak in &peaks[PRE_UPSAMPLE_TAPS..audio.len() - PRE_UPSAMPLE_TAPS] {
+            for peak in &peaks[PRE_UPSAMPLE_N_TAPS..audio.len() - PRE_UPSAMPLE_N_TAPS] {
                 assert!(
                     (*peak - 1.0).abs() < 0.002,
                     "sample_rate={sample_rate}, peak={peak}"
@@ -874,12 +787,12 @@ mod tests {
     }
 
     #[test]
-    fn bs_1770_phase_coefficients_have_exact_mirror_symmetry() {
-        for (i_phase, coefficients) in COEFFICIENTS.iter().enumerate() {
-            let mirror_phase = FIR_PHASE_COUNT - 1 - i_phase;
+    fn bs1770_phase_coefficients_have_exact_mirror_symmetry() {
+        for (i_phase, coefficients) in BS1770_COEFFICIENTS.iter().enumerate() {
+            let mirror_phase = BS1770_PHASE_COUNT - 1 - i_phase;
             assert_exact_mirror_symmetry(
                 coefficients,
-                &COEFFICIENTS[mirror_phase],
+                &BS1770_COEFFICIENTS[mirror_phase],
                 &format!("phase={i_phase}"),
             );
         }
@@ -897,7 +810,7 @@ mod tests {
                     let mut imaginary = 0.0;
 
                     for (tap, &coefficient) in phase_coefficients.iter().enumerate() {
-                        let position = tap as isize - PRE_UPSAMPLE_CENTER as isize;
+                        let position = tap as isize - PRE_UPSAMPLE_CENTER_TAP as isize;
                         let angle = angular_frequency * position as f64;
                         real += coefficient as f64 * angle.cos();
                         imaginary += coefficient as f64 * angle.sin();

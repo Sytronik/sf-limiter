@@ -2,12 +2,13 @@ use std::ops::Range;
 
 use crate::{LimiterError, layout::validate_layout};
 
+use super::convolve::{calc_mirrored_terms, convolve_fir_12, convolve_mirrored_fir_12};
 use super::{
-    CENTER_TAP, COEFFICIENTS, FIR_TAP_COUNT, FOUR_X_MIRRORED_PHASES, InterpolationFactor,
-    PRE_UPSAMPLE_CENTER, PRE_UPSAMPLE_TAPS, PeakConfig, TRAILING_BOUNDARY_FRAMES, TWO_X_PHASES,
-    calc_interpolated_peak_at_frame, calc_mirrored_terms, calc_pre_upsample_interior_bounds,
-    decompose_mirrored_coefficients, pre_upsample_mirrored_samples, pre_upsample_symmetric_sample,
-    reduce_upsampled_peaks, validate_finite_samples,
+    BS1770_2X_PHASES, BS1770_CENTER_TAP, BS1770_COEFFICIENTS, BS1770_MIRRORED_COEFFS,
+    BS1770_N_TAPS, BS1770_TRAILING_BOUNDARY_FRAMES, InterpolationFactor, PRE_UPSAMPLE_CENTER_TAP,
+    PRE_UPSAMPLE_N_TAPS, PeakConfig, PreUpsampleCoefficients, calc_interpolated_peak_at_frame,
+    calc_pre_upsample_interior_bounds, pre_upsample_mirrored_samples,
+    pre_upsample_symmetric_sample, reduce_upsampled_peaks, validate_finite_samples,
 };
 
 // Bounds the mirrored-phase scratch space to 1 KiB while leaving enough
@@ -49,15 +50,20 @@ fn collect_interpolated_peaks(
         let channel_offset = i_channel * frame_count;
         let channel = &audio[channel_offset..channel_offset + frame_count];
 
-        if frame_count < FIR_TAP_COUNT {
+        if frame_count < BS1770_N_TAPS {
             collect_boundary_peaks(channel, &mut frame_peaks, 0..frame_count, interpolation);
             continue;
         }
 
         // The vectorizable path requires a complete FIR window; edge frames use
         // the scalar path so out-of-range taps can be treated as zero.
-        collect_boundary_peaks(channel, &mut frame_peaks, 0..CENTER_TAP, interpolation);
-        let trailing_start = frame_count - TRAILING_BOUNDARY_FRAMES;
+        collect_boundary_peaks(
+            channel,
+            &mut frame_peaks,
+            0..BS1770_CENTER_TAP,
+            interpolation,
+        );
+        let trailing_start = frame_count - BS1770_TRAILING_BOUNDARY_FRAMES;
         collect_boundary_peaks(
             channel,
             &mut frame_peaks,
@@ -67,13 +73,13 @@ fn collect_interpolated_peaks(
 
         match interpolation {
             InterpolationFactor::Two => {
-                for phase in TWO_X_PHASES {
-                    convolve_phase(channel, &mut frame_peaks, &COEFFICIENTS[phase]);
+                for phase in BS1770_2X_PHASES {
+                    convolve_phase(channel, &mut frame_peaks, &BS1770_COEFFICIENTS[phase]);
                 }
             }
             InterpolationFactor::Four => {
-                for phase in FOUR_X_MIRRORED_PHASES {
-                    convolve_mirrored_phases(channel, &mut frame_peaks, &COEFFICIENTS[phase]);
+                for coeff_pairs in &BS1770_MIRRORED_COEFFS {
+                    convolve_mirrored_phases(channel, &mut frame_peaks, coeff_pairs);
                 }
             }
         }
@@ -105,15 +111,15 @@ fn collect_boundary_peaks(
 fn convolve_phase(
     audio_channel: &[f32],
     frame_peaks: &mut [f32],
-    coefficients: &[f32; FIR_TAP_COUNT],
+    coefficients: &[f32; BS1770_N_TAPS],
 ) {
     debug_assert_eq!(audio_channel.len(), frame_peaks.len());
-    debug_assert!(audio_channel.len() >= FIR_TAP_COUNT);
+    debug_assert!(audio_channel.len() >= BS1770_N_TAPS);
 
-    let interior_len = audio_channel.len() - (FIR_TAP_COUNT - 1);
+    let interior_len = audio_channel.len() - (BS1770_N_TAPS - 1);
     for index in 0..interior_len {
         let sum = convolve_fir_12!(|tap| audio_channel[index + tap], coefficients);
-        let frame_peak = &mut frame_peaks[index + CENTER_TAP];
+        let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
         *frame_peak = frame_peak.max(sum.abs());
     }
 }
@@ -124,21 +130,16 @@ fn convolve_phase(
 fn convolve_mirrored_phases(
     channel_audio: &[f32],
     frame_peaks: &mut [f32],
-    coefficients: &[f32; FIR_TAP_COUNT],
+    coeff_pairs: &[(f32, f32); BS1770_N_TAPS / 2],
 ) {
     debug_assert_eq!(channel_audio.len(), frame_peaks.len());
-    debug_assert!(channel_audio.len() >= FIR_TAP_COUNT);
+    debug_assert!(channel_audio.len() >= BS1770_N_TAPS);
 
-    let coefficient_pairs: [(f32, f32); FIR_TAP_COUNT / 2] = std::array::from_fn(|tap| {
-        decompose_mirrored_coefficients(coefficients[tap], coefficients[FIR_TAP_COUNT - 1 - tap])
-    });
-    let interior_len = channel_audio.len() - (FIR_TAP_COUNT - 1);
+    let interior_len = channel_audio.len() - (BS1770_N_TAPS - 1);
     for index in 0..interior_len {
-        let (sample, mirror_sample) = convolve_mirrored_fir_12!(
-            |tap| channel_audio[index + tap],
-            &coefficient_pairs,
-        );
-        let frame_peak = &mut frame_peaks[index + CENTER_TAP];
+        let (sample, mirror_sample) =
+            convolve_mirrored_fir_12!(|tap| channel_audio[index + tap], coeff_pairs);
+        let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
         *frame_peak = frame_peak.max(sample.abs()).max(mirror_sample.abs());
     }
 }
@@ -164,7 +165,7 @@ fn pre_upsample(
     audio: &[f32],
     channels: usize,
     frame_count: usize,
-    coefficients: &[[f32; PRE_UPSAMPLE_TAPS]],
+    coefficients: &PreUpsampleCoefficients,
 ) -> Vec<f32> {
     let factor = coefficients.len();
     let upsampled_frame_count = frame_count * factor;
@@ -181,12 +182,7 @@ fn pre_upsample(
             out_frame[0] = sample;
         }
 
-        for (i_phase, phase_coefficients) in coefficients
-            .iter()
-            .enumerate()
-            .take(factor.div_ceil(2))
-            .skip(1)
-        {
+        for (i_phase, coeff_pairs) in coefficients.mirrored_phases() {
             calculate_mirrored_phase(
                 channel,
                 out_channel,
@@ -194,12 +190,11 @@ fn pre_upsample(
                 i_phase,
                 interior_start,
                 interior_end,
-                phase_coefficients,
+                coeff_pairs,
             );
         }
 
-        if factor.is_multiple_of(2) {
-            let i_phase = factor / 2;
+        if let Some((i_phase, phase_coefficients)) = coefficients.symmetric_phase() {
             calculate_symmetric_phase(
                 channel,
                 out_channel,
@@ -207,7 +202,7 @@ fn pre_upsample(
                 i_phase,
                 interior_start,
                 interior_end,
-                &coefficients[i_phase],
+                phase_coefficients,
             );
         }
     }
@@ -223,7 +218,7 @@ fn calculate_mirrored_phase(
     i_phase: usize,
     interior_start: usize,
     interior_end: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coeff_pairs: &[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2],
 ) {
     // Phase p and phase factor-p use reversed coefficients. Pairing mirrored
     // samples lets both outputs share two products instead of using four.
@@ -236,7 +231,7 @@ fn calculate_mirrored_phase(
             |i_src_frame| audio[i_src_frame],
             i_frame,
             frame_count,
-            coefficients,
+            coeff_pairs,
         );
         let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
         out_frame[i_phase] = sample;
@@ -248,24 +243,12 @@ fn calculate_mirrored_phase(
 
     let mut phase_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
     let mut mirror_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
-    let coefficient_pairs: [(f32, f32); PRE_UPSAMPLE_TAPS / 2] = std::array::from_fn(|tap| {
-        decompose_mirrored_coefficients(
-            coefficients[tap],
-            coefficients[PRE_UPSAMPLE_TAPS - 1 - tap],
-        )
-    });
     for block_start in (interior_start..interior_end).step_by(PRE_UPSAMPLE_BLOCK_FRAMES) {
         let block_end = (block_start + PRE_UPSAMPLE_BLOCK_FRAMES).min(interior_end);
         let block_length = block_end - block_start;
         let phase_block = &mut phase_out[..block_length];
         let mirror_block = &mut mirror_out[..block_length];
-        convolve_mirrored_phase_block(
-            audio,
-            phase_block,
-            mirror_block,
-            block_start,
-            &coefficient_pairs,
-        );
+        convolve_mirrored_phase_block(audio, phase_block, mirror_block, block_start, coeff_pairs);
         let output_block = &mut output[block_start * factor..block_end * factor];
         for (out_frame, (&sample, &mirror_sample)) in output_block
             .chunks_exact_mut(factor)
@@ -281,7 +264,7 @@ fn calculate_mirrored_phase(
             |i_src_frame| audio[i_src_frame],
             i_frame,
             frame_count,
-            coefficients,
+            coeff_pairs,
         );
         let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
         out_frame[i_phase] = sample;
@@ -296,18 +279,16 @@ fn convolve_mirrored_phase_block(
     phase_out: &mut [f32],
     mirror_out: &mut [f32],
     block_start: usize,
-    coefficient_pairs: &[(f32, f32); PRE_UPSAMPLE_TAPS / 2],
+    coeff_pairs: &[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2],
 ) {
     debug_assert_eq!(phase_out.len(), mirror_out.len());
     phase_out.fill(0.0);
     mirror_out.fill(0.0);
     let block_length = phase_out.len();
-    for (tap, &(common_coefficient, differential_coefficient)) in
-        coefficient_pairs.iter().enumerate()
-    {
-        let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let source_start = block_start + tap - PRE_UPSAMPLE_CENTER;
-        let mirror_source_start = block_start + mirror_tap - PRE_UPSAMPLE_CENTER;
+    for (tap, &(common_coefficient, differential_coefficient)) in coeff_pairs.iter().enumerate() {
+        let mirror_tap = PRE_UPSAMPLE_N_TAPS - 1 - tap;
+        let source_start = block_start + tap - PRE_UPSAMPLE_CENTER_TAP;
+        let mirror_source_start = block_start + mirror_tap - PRE_UPSAMPLE_CENTER_TAP;
         let source = &audio[source_start..source_start + block_length];
         let mirror_source = &audio[mirror_source_start..mirror_source_start + block_length];
 
@@ -332,7 +313,7 @@ fn calculate_symmetric_phase(
     i_phase: usize,
     interior_start: usize,
     interior_end: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coefficients: &[f32; PRE_UPSAMPLE_N_TAPS],
 ) {
     // The half-sample phase is self-symmetric, so each input pair shares one
     // coefficient and needs one product instead of two.
@@ -380,14 +361,18 @@ fn convolve_symmetric_phase_block(
     audio: &[f32],
     output: &mut [f32],
     block_start: usize,
-    coefficients: &[f32; PRE_UPSAMPLE_TAPS],
+    coefficients: &[f32; PRE_UPSAMPLE_N_TAPS],
 ) {
     output.fill(0.0);
     let block_length = output.len();
-    for (tap, &coefficient) in coefficients.iter().take(PRE_UPSAMPLE_TAPS / 2).enumerate() {
-        let mirror_tap = PRE_UPSAMPLE_TAPS - 1 - tap;
-        let source_start = block_start + tap - PRE_UPSAMPLE_CENTER;
-        let mirror_source_start = block_start + mirror_tap - PRE_UPSAMPLE_CENTER;
+    for (tap, &coefficient) in coefficients
+        .iter()
+        .take(PRE_UPSAMPLE_N_TAPS / 2)
+        .enumerate()
+    {
+        let mirror_tap = PRE_UPSAMPLE_N_TAPS - 1 - tap;
+        let source_start = block_start + tap - PRE_UPSAMPLE_CENTER_TAP;
+        let mirror_source_start = block_start + mirror_tap - PRE_UPSAMPLE_CENTER_TAP;
         let source = &audio[source_start..source_start + block_length];
         let mirror_source = &audio[mirror_source_start..mirror_source_start + block_length];
         for i_frame in 0..block_length {
@@ -441,7 +426,7 @@ mod tests {
         audio: &[f32],
         channels: usize,
         frame_count: usize,
-        coefficients: &[[f32; PRE_UPSAMPLE_TAPS]],
+        coefficients: &[[f32; PRE_UPSAMPLE_N_TAPS]],
     ) -> Vec<f32> {
         let factor = coefficients.len();
         let upsampled_frame_count = frame_count * factor;
@@ -472,14 +457,14 @@ mod tests {
             .collect();
         let mut peaks = vec![0.0; audio.len()];
 
-        convolve_phase(&audio, &mut peaks, &COEFFICIENTS[1]);
+        convolve_phase(&audio, &mut peaks, &BS1770_COEFFICIENTS[1]);
 
-        for index in 0..audio.len() - (FIR_TAP_COUNT - 1) {
-            let samples: [f32; FIR_TAP_COUNT] =
-                audio[index..index + FIR_TAP_COUNT].try_into().unwrap();
+        for index in 0..audio.len() - (BS1770_N_TAPS - 1) {
+            let samples: [f32; BS1770_N_TAPS] =
+                audio[index..index + BS1770_N_TAPS].try_into().unwrap();
             assert_eq!(
-                peaks[index + CENTER_TAP],
-                convolve_scalar(&samples, &COEFFICIENTS[1]).abs()
+                peaks[index + BS1770_CENTER_TAP],
+                convolve_scalar(&samples, &BS1770_COEFFICIENTS[1]).abs()
             );
         }
     }
@@ -528,8 +513,8 @@ mod tests {
 
     #[test]
     fn vectorizable_pre_upsampling_matches_scalar_reference() {
-        let first_block_boundary = PRE_UPSAMPLE_BLOCK_FRAMES + PRE_UPSAMPLE_TAPS - 1;
-        let second_block_boundary = 2 * PRE_UPSAMPLE_BLOCK_FRAMES + PRE_UPSAMPLE_TAPS - 1;
+        let first_block_boundary = PRE_UPSAMPLE_BLOCK_FRAMES + PRE_UPSAMPLE_N_TAPS - 1;
+        let second_block_boundary = 2 * PRE_UPSAMPLE_BLOCK_FRAMES + PRE_UPSAMPLE_N_TAPS - 1;
         for channels in [1, 2, 3, 4, 8] {
             for frame_count in [
                 0,

@@ -112,18 +112,7 @@ fn convolve_phase(
 
     let interior_len = audio_channel.len() - (FIR_TAP_COUNT - 1);
     for index in 0..interior_len {
-        let sum = audio_channel[index] * coefficients[11]
-            + audio_channel[index + 1] * coefficients[10]
-            + audio_channel[index + 2] * coefficients[9]
-            + audio_channel[index + 3] * coefficients[8]
-            + audio_channel[index + 4] * coefficients[7]
-            + audio_channel[index + 5] * coefficients[6]
-            + audio_channel[index + 6] * coefficients[5]
-            + audio_channel[index + 7] * coefficients[4]
-            + audio_channel[index + 8] * coefficients[3]
-            + audio_channel[index + 9] * coefficients[2]
-            + audio_channel[index + 10] * coefficients[1]
-            + audio_channel[index + 11] * coefficients[0];
+        let sum = convolve_fir_12!(|tap| audio_channel[index + tap], coefficients);
         let frame_peak = &mut frame_peaks[index + CENTER_TAP];
         *frame_peak = frame_peak.max(sum.abs());
     }
@@ -145,51 +134,10 @@ fn convolve_mirrored_phases(
     });
     let interior_len = channel_audio.len() - (FIR_TAP_COUNT - 1);
     for index in 0..interior_len {
-        let (common_0, differential_0) = calc_mirrored_terms(
-            channel_audio[index],
-            channel_audio[index + 11],
-            coefficient_pairs[0].0,
-            coefficient_pairs[0].1,
+        let (sample, mirror_sample) = convolve_mirrored_fir_12!(
+            |tap| channel_audio[index + tap],
+            &coefficient_pairs,
         );
-        let (common_1, differential_1) = calc_mirrored_terms(
-            channel_audio[index + 1],
-            channel_audio[index + 10],
-            coefficient_pairs[1].0,
-            coefficient_pairs[1].1,
-        );
-        let (common_2, differential_2) = calc_mirrored_terms(
-            channel_audio[index + 2],
-            channel_audio[index + 9],
-            coefficient_pairs[2].0,
-            coefficient_pairs[2].1,
-        );
-        let (common_3, differential_3) = calc_mirrored_terms(
-            channel_audio[index + 3],
-            channel_audio[index + 8],
-            coefficient_pairs[3].0,
-            coefficient_pairs[3].1,
-        );
-        let (common_4, differential_4) = calc_mirrored_terms(
-            channel_audio[index + 4],
-            channel_audio[index + 7],
-            coefficient_pairs[4].0,
-            coefficient_pairs[4].1,
-        );
-        let (common_5, differential_5) = calc_mirrored_terms(
-            channel_audio[index + 5],
-            channel_audio[index + 6],
-            coefficient_pairs[5].0,
-            coefficient_pairs[5].1,
-        );
-        let common_sum = common_0 + common_1 + common_2 + common_3 + common_4 + common_5;
-        let differential_sum = differential_0
-            + differential_1
-            + differential_2
-            + differential_3
-            + differential_4
-            + differential_5;
-        let sample = common_sum + differential_sum;
-        let mirror_sample = common_sum - differential_sum;
         let frame_peak = &mut frame_peaks[index + CENTER_TAP];
         *frame_peak = frame_peak.max(sample.abs()).max(mirror_sample.abs());
     }

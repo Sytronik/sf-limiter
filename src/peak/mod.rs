@@ -1,5 +1,150 @@
 //! Sample-peak collection and ITU-R BS.1770-5 Annex 2 true-peak estimation.
 
+// Keep the fixed tap expressions explicit so LLVM can vectorize the independent
+// outer channel or frame loops without relying on nested-loop transformations.
+macro_rules! convolve_fir_12 {
+    (|$tap:ident| $sample:expr, $coefficients:expr $(,)?) => {{
+        let coefficients = $coefficients;
+        let mut sum = {
+            let $tap = 0_usize;
+            $sample * coefficients[11]
+        };
+        {
+            let $tap = 1_usize;
+            sum += $sample * coefficients[10];
+        }
+        {
+            let $tap = 2_usize;
+            sum += $sample * coefficients[9];
+        }
+        {
+            let $tap = 3_usize;
+            sum += $sample * coefficients[8];
+        }
+        {
+            let $tap = 4_usize;
+            sum += $sample * coefficients[7];
+        }
+        {
+            let $tap = 5_usize;
+            sum += $sample * coefficients[6];
+        }
+        {
+            let $tap = 6_usize;
+            sum += $sample * coefficients[5];
+        }
+        {
+            let $tap = 7_usize;
+            sum += $sample * coefficients[4];
+        }
+        {
+            let $tap = 8_usize;
+            sum += $sample * coefficients[3];
+        }
+        {
+            let $tap = 9_usize;
+            sum += $sample * coefficients[2];
+        }
+        {
+            let $tap = 10_usize;
+            sum += $sample * coefficients[1];
+        }
+        {
+            let $tap = 11_usize;
+            sum += $sample * coefficients[0];
+        }
+        sum
+    }};
+}
+
+macro_rules! convolve_mirrored_fir_12 {
+    (|$tap:ident| $sample:expr, $coefficient_pairs:expr $(,)?) => {{
+        let coefficient_pairs = $coefficient_pairs;
+        let (common_0, differential_0) = calc_mirrored_terms(
+            {
+                let $tap = 0_usize;
+                $sample
+            },
+            {
+                let $tap = 11_usize;
+                $sample
+            },
+            coefficient_pairs[0].0,
+            coefficient_pairs[0].1,
+        );
+        let (common_1, differential_1) = calc_mirrored_terms(
+            {
+                let $tap = 1_usize;
+                $sample
+            },
+            {
+                let $tap = 10_usize;
+                $sample
+            },
+            coefficient_pairs[1].0,
+            coefficient_pairs[1].1,
+        );
+        let (common_2, differential_2) = calc_mirrored_terms(
+            {
+                let $tap = 2_usize;
+                $sample
+            },
+            {
+                let $tap = 9_usize;
+                $sample
+            },
+            coefficient_pairs[2].0,
+            coefficient_pairs[2].1,
+        );
+        let (common_3, differential_3) = calc_mirrored_terms(
+            {
+                let $tap = 3_usize;
+                $sample
+            },
+            {
+                let $tap = 8_usize;
+                $sample
+            },
+            coefficient_pairs[3].0,
+            coefficient_pairs[3].1,
+        );
+        let (common_4, differential_4) = calc_mirrored_terms(
+            {
+                let $tap = 4_usize;
+                $sample
+            },
+            {
+                let $tap = 7_usize;
+                $sample
+            },
+            coefficient_pairs[4].0,
+            coefficient_pairs[4].1,
+        );
+        let (common_5, differential_5) = calc_mirrored_terms(
+            {
+                let $tap = 5_usize;
+                $sample
+            },
+            {
+                let $tap = 6_usize;
+                $sample
+            },
+            coefficient_pairs[5].0,
+            coefficient_pairs[5].1,
+        );
+        let common_sum = common_0 + common_1 + common_2 + common_3 + common_4 + common_5;
+        let differential_sum = differential_0
+            + differential_1
+            + differential_2
+            + differential_3
+            + differential_4
+            + differential_5;
+        let sample = common_sum + differential_sum;
+        let mirror_sample = common_sum - differential_sum;
+        (sample, mirror_sample)
+    }};
+}
+
 mod interleaved;
 mod planar;
 

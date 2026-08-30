@@ -8,7 +8,7 @@ use super::{
     BS1770_N_TAPS, BS1770_TRAILING_BOUNDARY_FRAMES, InterpolationFactor, PRE_UPSAMPLE_CENTER_TAP,
     PRE_UPSAMPLE_N_TAPS, PeakConfig, PreUpsampleCoefficients, calc_interpolated_peak_at_frame,
     calc_pre_upsample_interior_bounds, pre_upsample_mirrored_samples,
-    pre_upsample_symmetric_sample, reduce_upsampled_peaks,
+    pre_upsample_symmetric_sample, reduce_upsampled_peaks, validate_input_sample,
 };
 
 // Bounds the mirrored-phase scratch space to 1 KiB while leaving enough
@@ -26,7 +26,7 @@ pub(super) fn collect(
     }
 
     match config {
-        PeakConfig::SamplePeak => collect_sample_peaks(audio, channels),
+        PeakConfig::SamplePeak => collect_validated_sample_peaks(audio, channels),
         PeakConfig::Interpolated(interpolation) => {
             collect_interpolated_peaks(audio, channels, *interpolation)
         }
@@ -158,6 +158,26 @@ fn collect_sample_peaks(audio: &[f32], channels: usize) -> Result<Vec<f32>, Limi
 
     for channel in audio.chunks_exact(frame_count) {
         for (peak, sample) in frame_peaks.iter_mut().zip(channel) {
+            *peak = peak.max(sample.abs());
+        }
+    }
+    Ok(frame_peaks)
+}
+
+fn collect_validated_sample_peaks(
+    audio: &[f32],
+    channels: usize,
+) -> Result<Vec<f32>, LimiterError> {
+    let frame_count = validate_layout(audio.len(), channels)?;
+
+    let mut frame_peaks = vec![0.0_f32; frame_count];
+    if frame_count == 0 {
+        return Ok(frame_peaks);
+    }
+
+    for (i_channel, channel) in audio.chunks_exact(frame_count).enumerate() {
+        for (i_frame, (peak, &sample)) in frame_peaks.iter_mut().zip(channel).enumerate() {
+            validate_input_sample(i_channel * frame_count + i_frame, sample)?;
             *peak = peak.max(sample.abs());
         }
     }

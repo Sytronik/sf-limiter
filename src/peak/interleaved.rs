@@ -8,7 +8,7 @@ use super::{
     BS1770_N_TAPS, BS1770_TRAILING_BOUNDARY_FRAMES, InterpolationFactor, PRE_UPSAMPLE_CENTER_TAP,
     PRE_UPSAMPLE_N_TAPS, PeakConfig, PreUpsampleCoefficients, calc_interpolated_peak_at_frame,
     calc_pre_upsample_interior_bounds, pre_upsample_mirrored_samples,
-    pre_upsample_symmetric_sample, reduce_upsampled_peaks,
+    pre_upsample_symmetric_sample, reduce_upsampled_peaks, validate_input_sample,
 };
 
 pub(super) fn collect(
@@ -17,7 +17,7 @@ pub(super) fn collect(
     config: &PeakConfig,
 ) -> Result<Vec<f32>, LimiterError> {
     match config {
-        PeakConfig::SamplePeak => collect_sample_peaks(audio, channels),
+        PeakConfig::SamplePeak => collect_validated_sample_peaks(audio, channels),
         PeakConfig::Interpolated(interpolation) => {
             collect_interpolated_peaks(audio, channels, *interpolation)
         }
@@ -173,6 +173,24 @@ fn collect_sample_peaks(audio: &[f32], channels: usize) -> Result<Vec<f32>, Limi
     let mut frame_peaks = Vec::with_capacity(frame_count);
     for frame in audio.chunks_exact(channels) {
         frame_peaks.push(frame.iter().map(|sample| sample.abs()).fold(0.0, f32::max));
+    }
+    Ok(frame_peaks)
+}
+
+fn collect_validated_sample_peaks(
+    audio: &[f32],
+    channels: usize,
+) -> Result<Vec<f32>, LimiterError> {
+    let frame_count = validate_layout(audio.len(), channels)?;
+
+    let mut frame_peaks = Vec::with_capacity(frame_count);
+    for (i_frame, frame) in audio.chunks_exact(channels).enumerate() {
+        let mut peak = 0.0_f32;
+        for (i_channel, &sample) in frame.iter().enumerate() {
+            validate_input_sample(i_frame * channels + i_channel, sample)?;
+            peak = peak.max(sample.abs());
+        }
+        frame_peaks.push(peak);
     }
     Ok(frame_peaks)
 }

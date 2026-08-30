@@ -191,7 +191,11 @@ impl PeakConfig {
         layout: AudioLayout,
     ) -> Result<Vec<f32>, LimiterError> {
         validate_layout(audio.len(), channels)?;
-        validate_input_samples(audio)?;
+        // Sample-peak collectors fuse input validation with peak reduction to
+        // avoid a second full pass over the default processing path.
+        if !matches!(self, Self::SamplePeak) {
+            validate_input_samples(audio)?;
+        }
         match layout {
             AudioLayout::Interleaved => interleaved::collect(audio, channels, self),
             AudioLayout::Planar => planar::collect(audio, channels, self),
@@ -439,15 +443,21 @@ fn interpolate_two_phases(samples: &[f32; BS1770_N_TAPS]) -> f32 {
 
 fn validate_input_samples(audio: &[f32]) -> Result<(), LimiterError> {
     for (index, &sample) in audio.iter().enumerate() {
-        if !sample.is_finite() {
-            return Err(LimiterError::NonFiniteSample { index });
-        }
-        if sample.abs() > MAX_INPUT_SAMPLE_AMPLITUDE {
-            return Err(LimiterError::InputSampleOutOfRange {
-                index,
-                value: sample,
-            });
-        }
+        validate_input_sample(index, sample)?;
+    }
+    Ok(())
+}
+
+#[inline(always)]
+pub(super) fn validate_input_sample(index: usize, sample: f32) -> Result<(), LimiterError> {
+    if !sample.is_finite() {
+        return Err(LimiterError::NonFiniteSample { index });
+    }
+    if sample.abs() > MAX_INPUT_SAMPLE_AMPLITUDE {
+        return Err(LimiterError::InputSampleOutOfRange {
+            index,
+            value: sample,
+        });
     }
     Ok(())
 }

@@ -20,6 +20,11 @@ pub(super) fn collect(
     channels: usize,
     config: &PeakConfig,
 ) -> Result<Vec<f32>, LimiterError> {
+    if audio.is_empty() {
+        validate_layout(audio.len(), channels)?;
+        return Ok(Vec::new());
+    }
+
     match config {
         PeakConfig::SamplePeak => collect_sample_peaks(audio, channels),
         PeakConfig::Interpolated(interpolation) => {

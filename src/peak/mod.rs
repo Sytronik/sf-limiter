@@ -646,6 +646,51 @@ mod tests {
     }
 
     #[test]
+    fn ebu_true_peak_compliance_tones_are_within_specified_tolerance() {
+        // EBU Tech 3341 (2023), Table 1, test cases 15-19:
+        // https://tech.ebu.ch/docs/tech/tech3341.pdf
+        let sample_rate = 48_000;
+        let frame_count = sample_rate as usize / 5;
+        let fade_frames = sample_rate as usize / 100;
+
+        for (case, frequency_divisor, amplitude, phase_degrees, expected_dbtp) in [
+            (15, 4.0, 0.50, 0.0, -6.0),
+            (16, 4.0, 0.50, 45.0, -6.0),
+            (17, 6.0, 0.50, 60.0, -6.0),
+            (18, 8.0, 0.50, 67.5, -6.0),
+            (19, 4.0, 1.41, 45.0, 3.0),
+        ] {
+            let phase = phase_degrees * std::f64::consts::PI / 180.0;
+            let audio: Vec<_> = (0..frame_count)
+                .flat_map(|i_frame| {
+                    let fade = if i_frame < fade_frames {
+                        i_frame as f64 / fade_frames as f64
+                    } else if i_frame >= frame_count - fade_frames {
+                        (frame_count - 1 - i_frame) as f64 / fade_frames as f64
+                    } else {
+                        1.0
+                    };
+                    let sample = amplitude
+                        * (2.0 * std::f64::consts::PI * i_frame as f64 / frequency_divisor + phase)
+                            .sin()
+                        * fade;
+                    [sample as f32; 2]
+                })
+                .collect();
+
+            let peaks =
+                collect_true_peaks(&audio, 2, sample_rate, AudioLayout::Interleaved).unwrap();
+            let peak = peaks.into_iter().fold(0.0, f32::max);
+            let actual_dbtp = 20.0 * f64::from(peak).log10();
+
+            assert!(
+                (expected_dbtp - 0.4..=expected_dbtp + 0.2).contains(&actual_dbtp),
+                "EBU Tech 3341 case {case}: actual={actual_dbtp} dBTP, expected={expected_dbtp} dBTP +0.2/-0.4 dB"
+            );
+        }
+    }
+
+    #[test]
     fn planar_peak_collection_matches_interleaved_peak_collection() {
         let frame_count = 257;
         for channels in [1, 2, 3, 4, 5, 8] {

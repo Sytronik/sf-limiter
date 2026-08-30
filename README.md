@@ -78,10 +78,11 @@ Input may be a one-dimensional mono array or a two-dimensional multichannel
 array. The last axis is interpreted as frames by default, so the usual shape is
 `(channels, frames)`. Pass `axis=0` for `(frames, channels)`. The
 input is converted to `float32` without being mutated; the returned audio is a
-new `float32` array, and `frame_gains` contains one value per frame.
+new `float32` array, and `frame_gains` contains one value per frame. Input
+samples must be finite and within the inclusive range `[-2 ** 32, 2 ** 32]`.
 
-Each call starts from a neutral gain envelope. Non-finite samples and invalid
-configuration values raise `ValueError`.
+Each call starts from a neutral gain envelope. Non-finite or out-of-range samples
+and invalid configuration values raise `ValueError`.
 
 ## Rust
 
@@ -135,11 +136,12 @@ rate.
 
 ## Ceiling guarantee
 
-For finite input, a valid channel count, and a finite `threshold_dBFS` no greater
-than `0.0` dBFS, every returned discrete sample is finite and has an absolute
-value no greater than the corresponding linear ceiling
-(`10 ** (threshold_dBFS / 20)`). The test suite checks this with large impulses,
-high-level deterministic noise, mono input, and linked multichannel input.
+For input samples within `[-2 ** 32, 2 ** 32]`, a valid channel count, and a
+finite `threshold_dBFS` no greater than `0.0` dBFS, every returned discrete
+sample is finite and has an absolute value no greater than the corresponding
+linear ceiling (`10 ** (threshold_dBFS / 20)`). The test suite checks this with
+large impulses, high-level deterministic noise, mono input, and linked
+multichannel input.
 
 This is a brick-wall guarantee for discrete sample peaks in both modes. With
 true-peak limiting enabled, the BS.1770-5 estimate is used to calculate the

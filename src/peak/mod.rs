@@ -6,7 +6,8 @@ mod planar;
 
 use std::ops::Deref;
 
-use crate::{LimiterError, layout::AudioLayout};
+use crate::layout::{AudioLayout, validate_layout};
+use crate::{LimiterError, MAX_INPUT_SAMPLE_AMPLITUDE};
 
 use convolve::{
     convolve_mirrored_samples_with_pairs, convolve_scalar, decompose_mirrored_coefficients,
@@ -189,6 +190,8 @@ impl PeakConfig {
         channels: usize,
         layout: AudioLayout,
     ) -> Result<Vec<f32>, LimiterError> {
+        validate_layout(audio.len(), channels)?;
+        validate_input_samples(audio)?;
         match layout {
             AudioLayout::Interleaved => interleaved::collect(audio, channels, self),
             AudioLayout::Planar => planar::collect(audio, channels, self),
@@ -434,12 +437,19 @@ fn interpolate_two_phases(samples: &[f32; BS1770_N_TAPS]) -> f32 {
         .fold(0.0, f32::max)
 }
 
-pub(super) fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError> {
-    if let Some(index) = audio.iter().position(|sample| !sample.is_finite()) {
-        Err(LimiterError::NonFiniteSample { index })
-    } else {
-        Ok(())
+fn validate_input_samples(audio: &[f32]) -> Result<(), LimiterError> {
+    for (index, &sample) in audio.iter().enumerate() {
+        if !sample.is_finite() {
+            return Err(LimiterError::NonFiniteSample { index });
+        }
+        if sample.abs() > MAX_INPUT_SAMPLE_AMPLITUDE {
+            return Err(LimiterError::InputSampleOutOfRange {
+                index,
+                value: sample,
+            });
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]

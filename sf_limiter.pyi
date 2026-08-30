@@ -46,7 +46,8 @@ class SFLimiter:
         Args:
             audio: A one-dimensional mono array or a two-dimensional
                 multichannel array. Values are converted to ``numpy.float32``;
-                the input is not modified.
+                the input is not modified. Samples must be finite and within the
+                inclusive range ``[-2 ** 32, 2 ** 32]``.
             axis: Frame axis. The default of ``-1`` expects
                 ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
 
@@ -105,7 +106,8 @@ def limit(
     Args:
         audio: A one-dimensional mono array or a two-dimensional multichannel
             array. Values are converted to ``numpy.float32``; the input is not
-            modified.
+            modified. Samples must be finite and within the inclusive range
+            ``[-2 ** 32, 2 ** 32]``.
         sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
         threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
             ``0.0`` is full scale and approximately ``-6.02`` is half scale.

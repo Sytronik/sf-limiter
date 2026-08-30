@@ -20,6 +20,8 @@ use std::fmt::{self, Display, Formatter};
 use envelope::{BoxStackFilter, ExponentialRelease, MovingMinimum};
 use layout::AudioLayout;
 
+pub(crate) const MAX_INPUT_SAMPLE_AMPLITUDE: f32 = 4_294_967_296.0; // 2^32
+
 #[cfg(test)]
 const TRUE_PEAK_SAMPLE_RATE_CASES: [u32; 13] = [
     8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 176_400,
@@ -47,6 +49,10 @@ pub enum LimiterError {
     },
     NonFiniteSample {
         index: usize,
+    },
+    InputSampleOutOfRange {
+        index: usize,
+        value: f32,
     },
 }
 
@@ -96,6 +102,14 @@ impl Display for LimiterError {
                     "input sample at flat index {index} is not finite"
                 )
             }
+            Self::InputSampleOutOfRange { index, value } => {
+                let maximum = MAX_INPUT_SAMPLE_AMPLITUDE as u64;
+                write!(
+                    formatter,
+                    "input sample at flat index {index} must be between -{maximum} and \
+                    {maximum}, got {value}"
+                )
+            }
         }
     }
 }
@@ -112,6 +126,9 @@ pub struct LimiterOutput {
 }
 
 /// A look-ahead limiter with a finite-length, smoothly varying gain envelope.
+///
+/// Input samples must be finite and within the inclusive range
+/// `[-2^32, 2^32]`.
 #[derive(Clone, Debug)]
 #[allow(non_snake_case)]
 pub struct SFLimiter {

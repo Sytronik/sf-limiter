@@ -74,7 +74,8 @@ impl PySFLimiter {
     /// Args:
     ///     audio: A one-dimensional mono array or a two-dimensional
     ///         multichannel array. Values are converted to ``numpy.float32``;
-    ///         the input is not modified.
+    ///         the input is not modified. Samples must be finite and within the
+    ///         inclusive range ``[-2 ** 32, 2 ** 32]``.
     ///     axis: Frame axis. The default of ``-1`` expects
     ///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
     ///         For mono input, ``0`` and ``-1`` are
@@ -89,7 +90,7 @@ impl PySFLimiter {
     /// Raises:
     ///     ValueError: If the input is not one- or two-dimensional, the
     ///         frame axis is invalid, the channel dimension is empty, or an
-    ///         input sample is not finite.
+    ///         input sample is not finite or is outside the supported range.
     #[pyo3(signature = (audio, axis = -1))]
     fn process<'py>(
         &mut self,
@@ -171,7 +172,8 @@ impl PySFLimiter {
 /// Args:
 ///     audio: A one-dimensional mono array or a two-dimensional multichannel
 ///         array. Values are converted to ``numpy.float32``; the input is not
-///         modified.
+///         modified. Samples must be finite and within the inclusive range
+///         ``[-2 ** 32, 2 ** 32]``.
 ///     sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
 ///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
 ///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
@@ -196,7 +198,7 @@ impl PySFLimiter {
 ///
 /// Raises:
 ///     ValueError: If a configuration value or input is invalid, or an input
-///         sample is not finite.
+///         sample is not finite or is outside the supported range.
 #[pyfunction]
 #[pyo3(signature = (
     audio,
@@ -316,6 +318,16 @@ fn process_numpy<'py>(
                 let i_frame = index % frames;
                 value_error(LimiterError::NonFiniteSample {
                     index: i_frame * channels + channel,
+                })
+            }
+            (LimiterError::InputSampleOutOfRange { index, value }, Some((frames, channels)))
+                if frames > 0 =>
+            {
+                let channel = index / frames;
+                let i_frame = index % frames;
+                value_error(LimiterError::InputSampleOutOfRange {
+                    index: i_frame * channels + channel,
+                    value,
                 })
             }
             (error, _) => value_error(error),

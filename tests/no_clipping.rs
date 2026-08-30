@@ -158,6 +158,45 @@ fn true_peak_planar_processing_matches_interleaved_processing() {
 }
 
 #[test]
+fn true_peak_low_rate_processing_accepts_supported_sample_boundaries() {
+    let maximum = 4_294_967_296.0_f32;
+    let input: Vec<_> = (0..128)
+        .map(|i_frame| if i_frame % 2 == 0 { maximum } else { -maximum })
+        .collect();
+    let mut interleaved_limiter = SFLimiter::new(8_000, 0.0, 1.0, 0.0, 0.0, true).unwrap();
+    let mut planar_limiter = interleaved_limiter.clone();
+
+    let interleaved_output = interleaved_limiter.process_interleaved(&input, 1).unwrap();
+    let planar_output = planar_limiter.process_planar(&input, 1).unwrap();
+
+    for output in [interleaved_output, planar_output] {
+        assert_eq!(output.frame_gains.len(), input.len());
+        assert!(output.frame_gains.iter().all(|gain| gain.is_finite()));
+        assert_never_clips(&output.audio, 1.0);
+    }
+}
+
+#[test]
+fn samples_outside_the_supported_range_are_rejected_without_mutation() {
+    let mut audio = [0.0, 8_589_934_592.0_f32];
+    let original = audio;
+    let mut limiter = SFLimiter::with_default(48_000).unwrap();
+
+    let error = limiter
+        .process_interleaved_inplace(&mut audio, 1)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        LimiterError::InputSampleOutOfRange {
+            index: 1,
+            value: original[1],
+        }
+    );
+    assert_eq!(audio, original);
+}
+
+#[test]
 fn planar_non_finite_index_uses_flat_channel_major_order() {
     let mut planar = [0.0, 1.0, 2.0, f32::INFINITY];
     let mut limiter = SFLimiter::with_default(48_000).unwrap();

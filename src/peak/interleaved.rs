@@ -8,7 +8,7 @@ use super::{
     BS1770_N_TAPS, BS1770_TRAILING_BOUNDARY_FRAMES, InterpolationFactor, PRE_UPSAMPLE_CENTER_TAP,
     PRE_UPSAMPLE_N_TAPS, PeakConfig, PreUpsampleCoefficients, calc_interpolated_peak_at_frame,
     calc_pre_upsample_interior_bounds, pre_upsample_mirrored_samples,
-    pre_upsample_symmetric_sample, reduce_upsampled_peaks, validate_finite_samples,
+    pre_upsample_symmetric_sample, reduce_upsampled_peaks,
 };
 
 pub(super) fn collect(
@@ -26,7 +26,6 @@ pub(super) fn collect(
             coefficients,
         } => {
             let frame_count = validate_layout(audio.len(), channels)?;
-            validate_finite_samples(audio)?;
             let factor = coefficients.len();
             let upsampled = pre_upsample(audio, channels, frame_count, coefficients);
             let upsampled_peaks = collect_interpolated_peaks(&upsampled, channels, *interpolation)?;
@@ -170,7 +169,6 @@ fn convolve_mirrored_phases(
 
 fn collect_sample_peaks(audio: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
     let frame_count = validate_layout(audio.len(), channels)?;
-    validate_finite_samples(audio)?;
 
     let mut frame_peaks = Vec::with_capacity(frame_count);
     for frame in audio.chunks_exact(channels) {

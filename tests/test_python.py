@@ -147,6 +147,24 @@ def test_invalid_dBFS_threshold_is_rejected(threshold_dBFS: float) -> None:
         sf_limiter.SFLimiter(48_000, threshold_dBFS=threshold_dBFS)
 
 
+def test_supported_sample_boundaries_are_accepted() -> None:
+    maximum = np.float32(2**32)
+    audio = np.array([-maximum, maximum], dtype=np.float32)
+
+    output, frame_gains = sf_limiter.limit(audio, sample_rate=48_000)
+
+    assert output.shape == audio.shape
+    assert frame_gains.shape == audio.shape
+    assert_never_clips(output)
+
+
+def test_frame_major_out_of_range_index_uses_input_order() -> None:
+    audio = np.array([[0.0, 2**33], [0.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="flat index 1 must be between"):
+        sf_limiter.limit(audio, sample_rate=48_000, axis=0)
+
+
 def test_float64_mono_input_never_clips() -> None:
     time = np.arange(48_000, dtype=np.float64)
     audio = np.sin(time * 0.071) * 8.0

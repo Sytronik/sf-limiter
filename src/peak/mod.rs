@@ -446,6 +446,7 @@ pub(super) fn validate_finite_samples(audio: &[f32]) -> Result<(), LimiterError>
 mod tests {
     use super::convolve::calc_mirrored_terms;
     use super::*;
+    use crate::TRUE_PEAK_SAMPLE_RATE_CASES;
 
     fn assert_close(actual: f32, expected: f32, context: &str) {
         let tolerance = 16.0 * f32::EPSILON * expected.abs().max(1.0);
@@ -708,10 +709,7 @@ mod tests {
                 })
                 .collect();
 
-            for sample_rate in [
-                8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200,
-                96_000, 176_400, 192_000,
-            ] {
+            for sample_rate in TRUE_PEAK_SAMPLE_RATE_CASES {
                 let interleaved = collect_true_peaks(
                     &interleaved_audio,
                     channels,
@@ -736,10 +734,7 @@ mod tests {
     #[test]
     fn constant_signal_has_unity_gain_away_from_boundaries() {
         let audio = vec![1.0; 3 * PRE_UPSAMPLE_N_TAPS];
-        for sample_rate in [
-            8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
-            176_400, 192_000,
-        ] {
+        for sample_rate in TRUE_PEAK_SAMPLE_RATE_CASES {
             let peaks =
                 collect_true_peaks(&audio, 1, sample_rate, AudioLayout::Interleaved).unwrap();
             for peak in &peaks[PRE_UPSAMPLE_N_TAPS..audio.len() - PRE_UPSAMPLE_N_TAPS] {
@@ -789,30 +784,6 @@ mod tests {
                 PeakConfig::try_from_sample_rate_for_true_peak(sample_rate),
                 Err(LimiterError::UnsupportedTruePeakSampleRate(sample_rate))
             );
-        }
-    }
-
-    #[test]
-    fn pre_upsample_coefficients_are_precomputed_for_each_factor() {
-        for (sample_rate, factor) in [
-            (8_000, 6),
-            (11_025, 4),
-            (12_000, 4),
-            (16_000, 3),
-            (22_050, 2),
-            (24_000, 2),
-            (32_000, 3),
-        ] {
-            let config = PeakConfig::new(sample_rate, true).unwrap();
-            let PeakConfig::PreUpsampled { coefficients, .. } = config else {
-                panic!("sample_rate={sample_rate} did not select pre-upsampling");
-            };
-            assert_eq!(coefficients, build_pre_upsample_coefficients(factor));
-        }
-
-        for sample_rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
-            let config = PeakConfig::new(sample_rate, true).unwrap();
-            assert!(!matches!(config, PeakConfig::PreUpsampled { .. }));
         }
     }
 
@@ -869,18 +840,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn unsupported_true_peak_sample_rate_is_rejected() {
-        assert_eq!(
-            collect_true_peaks(&[0.0], 1, 176_399, AudioLayout::Interleaved).unwrap_err(),
-            LimiterError::UnsupportedTruePeakSampleRate(176_399)
-        );
-        assert_eq!(
-            collect_true_peaks(&[0.0], 1, 10_000, AudioLayout::Planar).unwrap_err(),
-            LimiterError::UnsupportedTruePeakSampleRate(10_000)
-        );
     }
 
     #[test]

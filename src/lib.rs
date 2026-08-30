@@ -20,6 +20,12 @@ use std::fmt::{self, Display, Formatter};
 use envelope::{BoxStackFilter, ExponentialRelease, MovingMinimum};
 use layout::AudioLayout;
 
+#[cfg(test)]
+const TRUE_PEAK_SAMPLE_RATE_CASES: [u32; 13] = [
+    8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 176_400,
+    192_000,
+];
+
 /// Validation and input errors returned by [`SFLimiter`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum LimiterError {
@@ -408,10 +414,7 @@ mod tests {
 
     #[test]
     fn true_peak_mode_accepts_only_supported_sample_rates() {
-        for sample_rate in [
-            8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
-            176_400, 192_000,
-        ] {
+        for sample_rate in TRUE_PEAK_SAMPLE_RATE_CASES {
             assert!(SFLimiter::new(sample_rate, 0.0, 5.0, 15.0, 40.0, true).is_ok());
         }
 
@@ -521,10 +524,7 @@ mod tests {
 
     #[test]
     fn true_peak_mode_processes_every_supported_sample_rate() {
-        for sample_rate in [
-            8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000,
-            176_400, 192_000,
-        ] {
+        for sample_rate in TRUE_PEAK_SAMPLE_RATE_CASES {
             let input: Vec<_> = (0..256)
                 .map(|index| {
                     ((2.0 * std::f64::consts::PI * (sample_rate as f64 / 4.0) * index as f64

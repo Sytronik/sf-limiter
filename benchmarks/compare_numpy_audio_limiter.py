@@ -110,7 +110,7 @@ def validate_outputs(
         raise RuntimeError("numpy_audio_limiter.limit returned invalid samples")
 
 
-def print_header() -> None:
+def print_header(*, sf_true_peak: bool) -> None:
     print(f"Python {platform.python_version()} ({platform.machine()})")
     print(f"NumPy {np.__version__}")
     print(f"sf-limiter {package_version('sf-limiter')}")
@@ -121,6 +121,10 @@ def print_header() -> None:
     print("Deterministic input generation is excluded.")
     print(
         "sf-limiter returns audio and frame_gains; numpy-audio-limiter returns audio only."
+    )
+    print(
+        f"sf-limiter true-peak detection is {'enabled' if sf_true_peak else 'disabled'}; "
+        "numpy-audio-limiter always uses sample peaks."
     )
     print(
         "Limiter parameters are analogous, but the algorithms are not numerically equivalent."
@@ -161,7 +165,7 @@ def run(args: argparse.Namespace) -> None:
     attack_coefficient = time_constant_coefficient(args.attack_ms, args.sample_rate)
     release_coefficient = time_constant_coefficient(args.release_ms, args.sample_rate)
 
-    print_header()
+    print_header(sf_true_peak=args.sf_true_peak)
     for i_duration, duration in enumerate(args.durations):
         frames = max(1, round(duration * args.sample_rate))
         for channels in args.channels:
@@ -176,6 +180,7 @@ def run(args: argparse.Namespace) -> None:
                 attack_ms=args.attack_ms,
                 hold_ms=0.0,
                 release_ms=args.release_ms,
+                true_peak=args.sf_true_peak,
             )
 
             def sf_reused(
@@ -194,6 +199,7 @@ def run(args: argparse.Namespace) -> None:
                     attack_ms=args.attack_ms,
                     hold_ms=0.0,
                     release_ms=args.release_ms,
+                    true_peak=args.sf_true_peak,
                 )
 
             def numpy_one_shot(planar_audio: np.ndarray = audio) -> np.ndarray:
@@ -278,6 +284,11 @@ def parse_args() -> argparse.Namespace:
         type=threshold_dBFS_float,
         default=-1.0,
         help="output ceiling in dBFS (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--sf-true-peak",
+        action="store_true",
+        help="enable true-peak detection for sf-limiter only",
     )
     parser.add_argument("--attack-ms", type=positive_float, default=5.0)
     parser.add_argument("--release-ms", type=nonnegative_float, default=40.0)

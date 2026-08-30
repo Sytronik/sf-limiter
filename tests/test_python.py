@@ -36,6 +36,46 @@ def test_invalid_sample_rate_raises_value_error(sample_rate: int) -> None:
         sf_limiter.limit(np.zeros(1, dtype=np.float32), sample_rate=sample_rate)
 
 
+@pytest.mark.parametrize("sample_rate", [10_000, 47_999, 176_399])
+def test_true_peak_rejects_unsupported_sample_rate(sample_rate: int) -> None:
+    message = "true_peak does not support sample_rate"
+
+    with pytest.raises(ValueError, match=message):
+        sf_limiter.SFLimiter(sample_rate, true_peak=True)
+
+    with pytest.raises(ValueError, match=message):
+        sf_limiter.limit(
+            np.zeros(1, dtype=np.float32),
+            sample_rate=sample_rate,
+            true_peak=True,
+        )
+
+    sf_limiter.SFLimiter(sample_rate, true_peak=False)
+
+
+@pytest.mark.parametrize("sample_rate", [8_000, 11_025, 12_000, 16_000])
+def test_true_peak_accepts_low_sample_rates(sample_rate: int) -> None:
+    audio = np.array([0.25, -0.5, 0.75, -0.25], dtype=np.float32)
+    limiter = sf_limiter.SFLimiter(sample_rate, true_peak=True)
+
+    output, frame_gains = limiter.process(audio)
+
+    assert output.shape == audio.shape
+    assert frame_gains.shape == audio.shape
+    assert_never_clips(output)
+
+
+@pytest.mark.parametrize("sample_rate", [176_400, 192_000, 384_000])
+def test_true_peak_accepts_high_sample_rates_without_oversampling(
+    sample_rate: int,
+) -> None:
+    limiter = sf_limiter.SFLimiter(sample_rate, true_peak=True)
+    output, frame_gains = limiter.process(np.array([0.5, -0.75], dtype=np.float32))
+
+    assert np.array_equal(output, np.array([0.5, -0.75], dtype=np.float32))
+    assert np.array_equal(frame_gains, np.ones(2, dtype=np.float32))
+
+
 def test_threshold_is_configured_in_dBFS() -> None:
     audio = np.array([2.0, -2.0], dtype=np.float32)
     threshold_dBFS = -6.0
@@ -49,10 +89,80 @@ def test_threshold_is_configured_in_dBFS() -> None:
     assert_never_clips(output, threshold)
 
 
+def test_true_peak_option_limits_inter_sample_peaks() -> None:
+    frames = np.arange(256, dtype=np.float64)
+    audio = (
+        1.1 * np.sin(2.0 * np.pi * 12_000.0 * frames / 48_000.0 + np.pi / 4.0)
+    ).astype(np.float32)
+
+    sample_peak_output, _ = sf_limiter.limit(
+        audio,
+        sample_rate=48_000,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+    )
+    limiter = sf_limiter.SFLimiter(
+        48_000,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+        true_peak=True,
+    )
+    true_peak_output, frame_gains = limiter.process(audio)
+
+    assert np.array_equal(sample_peak_output, audio)
+    assert np.any(np.abs(true_peak_output) < np.abs(audio))
+    assert np.all((0.0 <= frame_gains) & (frame_gains <= 1.0))
+    assert limiter.true_peak is True
+    assert "true_peak=true" in repr(limiter).lower()
+
+
+def test_one_shot_true_peak_option_preserves_multichannel_shape() -> None:
+    frames = np.arange(128, dtype=np.float64)
+    mono = (
+        1.1 * np.sin(2.0 * np.pi * 12_000.0 * frames / 48_000.0 + np.pi / 4.0)
+    ).astype(np.float32)
+    audio = np.stack((mono, -0.75 * mono), axis=1)
+
+    output, frame_gains = sf_limiter.limit(
+        audio,
+        sample_rate=48_000,
+        threshold_dBFS=-2.0,
+        attack_ms=1.0,
+        hold_ms=0.0,
+        release_ms=0.0,
+        axis=0,
+        true_peak=True,
+    )
+
+    assert output.shape == audio.shape
+    assert frame_gains.shape == (audio.shape[0],)
+    assert_never_clips(output, threshold)
+
+
 @pytest.mark.parametrize("threshold_dBFS", [0.1, np.inf, -np.inf, np.nan])
 def test_invalid_dBFS_threshold_is_rejected(threshold_dBFS: float) -> None:
     with pytest.raises(ValueError, match="finite dBFS value"):
         sf_limiter.SFLimiter(48_000, threshold_dBFS=threshold_dBFS)
+
+
+def test_supported_sample_boundaries_are_accepted() -> None:
+    maximum = np.float32(2**32)
+    audio = np.array([-maximum, maximum], dtype=np.float32)
+
+    output, frame_gains = sf_limiter.limit(audio, sample_rate=48_000)
+
+    assert output.shape == audio.shape
+    assert frame_gains.shape == audio.shape
+    assert_never_clips(output)
+
+
+def test_frame_major_out_of_range_index_uses_input_order() -> None:
+    audio = np.array([[0.0, 2**33], [0.0, 0.0]], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="flat index 1 must be between"):
+        sf_limiter.limit(audio, sample_rate=48_000, axis=0)
 
 
 def test_float64_mono_input_never_clips() -> None:

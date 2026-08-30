@@ -60,7 +60,7 @@ fn linked_multichannel_signal_never_clips() {
         }
     }
 
-    let mut limiter = SFLimiter::new(48_000, -2.0, 5.0, 15.0, 40.0).unwrap();
+    let mut limiter = SFLimiter::new(48_000, -2.0, 5.0, 15.0, 40.0, false).unwrap();
     let output = limiter.process_interleaved(&input, channels).unwrap();
 
     assert_eq!(output.frame_gains.len(), frames);
@@ -70,7 +70,7 @@ fn linked_multichannel_signal_never_clips() {
 #[test]
 fn processing_in_place_has_the_same_hard_ceiling() {
     let mut audio = vec![4.0, -3.0, 2.0, -5.0, 0.25, -0.25];
-    let mut limiter = SFLimiter::new(1_000, 0.0, 1.0, 0.0, 0.0).unwrap();
+    let mut limiter = SFLimiter::new(1_000, 0.0, 1.0, 0.0, 0.0, false).unwrap();
 
     let frame_gains = limiter.process_interleaved_inplace(&mut audio, 2).unwrap();
 
@@ -82,7 +82,7 @@ fn processing_in_place_has_the_same_hard_ceiling() {
 fn repeated_calls_start_from_a_neutral_envelope() {
     let hot_input = vec![8.0; 16];
     let quiet_input = vec![0.25; 8];
-    let mut reused_limiter = SFLimiter::new(1_000, 0.0, 3.0, 2.0, 1_000.0).unwrap();
+    let mut reused_limiter = SFLimiter::new(1_000, 0.0, 3.0, 2.0, 1_000.0, false).unwrap();
     let mut fresh_limiter = reused_limiter.clone();
 
     reused_limiter.process_interleaved(&hot_input, 1).unwrap();
@@ -95,7 +95,7 @@ fn repeated_calls_start_from_a_neutral_envelope() {
 #[test]
 fn samples_use_the_reported_f32_gain() {
     let input = [1.1_f32, 0.1_f32];
-    let mut limiter = SFLimiter::new(1_000, -10.0, 1.0, 0.0, 0.0).unwrap();
+    let mut limiter = SFLimiter::new(1_000, -10.0, 1.0, 0.0, 0.0, false).unwrap();
 
     let output = limiter.process_interleaved(&input, 2).unwrap();
 
@@ -108,7 +108,7 @@ fn samples_use_the_reported_f32_gain() {
 fn planar_processing_matches_interleaved_processing() {
     let interleaved = [0.0, 0.0, 4.0, -5.0, -3.0, 2.0, 0.2, -0.2];
     let mut planar = [0.0, 4.0, -3.0, 0.2, 0.0, -5.0, 2.0, -0.2];
-    let mut interleaved_limiter = SFLimiter::new(1_000, -2.0, 1.0, 0.0, 0.0).unwrap();
+    let mut interleaved_limiter = SFLimiter::new(1_000, -2.0, 1.0, 0.0, 0.0, false).unwrap();
     let mut planar_limiter = interleaved_limiter.clone();
 
     let interleaved_output = interleaved_limiter
@@ -119,11 +119,81 @@ fn planar_processing_matches_interleaved_processing() {
         .unwrap();
 
     let planar_as_interleaved: Vec<_> = (0..4)
-        .flat_map(|frame| [planar[frame], planar[4 + frame]])
+        .flat_map(|i_frame| [planar[i_frame], planar[4 + i_frame]])
         .collect();
     assert_eq!(planar_frame_gains, interleaved_output.frame_gains);
     assert_eq!(planar_as_interleaved, interleaved_output.audio);
     assert_never_clips(&planar, threshold_from_dBFS(-2.0));
+}
+
+#[test]
+fn true_peak_planar_processing_matches_interleaved_processing() {
+    let interleaved: Vec<_> = (0..128)
+        .flat_map(|i_frame| {
+            let sample = (((2.0 * std::f64::consts::PI * 12_000.0 * i_frame as f64 / 48_000.0)
+                + std::f64::consts::FRAC_PI_4)
+                .sin() as f32)
+                * 1.1;
+            [sample, -0.75 * sample]
+        })
+        .collect();
+    let mut planar = Vec::with_capacity(interleaved.len());
+    planar.extend(interleaved.iter().step_by(2).copied());
+    planar.extend(interleaved.iter().skip(1).step_by(2).copied());
+    let mut interleaved_limiter = SFLimiter::new(48_000, -2.0, 1.0, 0.0, 0.0, true).unwrap();
+    let mut planar_limiter = interleaved_limiter.clone();
+
+    let interleaved_output = interleaved_limiter
+        .process_interleaved(&interleaved, 2)
+        .unwrap();
+    let planar_frame_gains = planar_limiter
+        .process_planar_inplace(&mut planar, 2)
+        .unwrap();
+    let planar_as_interleaved: Vec<_> = (0..128)
+        .flat_map(|i_frame| [planar[i_frame], planar[128 + i_frame]])
+        .collect();
+
+    assert_eq!(planar_frame_gains, interleaved_output.frame_gains);
+    assert_eq!(planar_as_interleaved, interleaved_output.audio);
+}
+
+#[test]
+fn true_peak_low_rate_processing_accepts_supported_sample_boundaries() {
+    let maximum = 4_294_967_296.0_f32;
+    let input: Vec<_> = (0..128)
+        .map(|i_frame| if i_frame % 2 == 0 { maximum } else { -maximum })
+        .collect();
+    let mut interleaved_limiter = SFLimiter::new(8_000, 0.0, 1.0, 0.0, 0.0, true).unwrap();
+    let mut planar_limiter = interleaved_limiter.clone();
+
+    let interleaved_output = interleaved_limiter.process_interleaved(&input, 1).unwrap();
+    let planar_output = planar_limiter.process_planar(&input, 1).unwrap();
+
+    for output in [interleaved_output, planar_output] {
+        assert_eq!(output.frame_gains.len(), input.len());
+        assert!(output.frame_gains.iter().all(|gain| gain.is_finite()));
+        assert_never_clips(&output.audio, 1.0);
+    }
+}
+
+#[test]
+fn samples_outside_the_supported_range_are_rejected_without_mutation() {
+    let mut audio = [0.0, 8_589_934_592.0_f32];
+    let original = audio;
+    let mut limiter = SFLimiter::with_default(48_000).unwrap();
+
+    let error = limiter
+        .process_interleaved_inplace(&mut audio, 1)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        LimiterError::InputSampleOutOfRange {
+            index: 1,
+            value: original[1],
+        }
+    );
+    assert_eq!(audio, original);
 }
 
 #[test]

@@ -21,6 +21,11 @@ type PyProcessOutput<'py> = PyResult<(Bound<'py, PyArrayDyn<f32>>, Bound<'py, Py
 ///         least one sample at ``sample_rate``.
 ///     hold_ms: Hold time in milliseconds. May be zero.
 ///     release_ms: Release time in milliseconds. May be zero.
+///     true_peak: If true, use ITU-R BS.1770-5 true-peak detection to calculate
+///         limiter gain. The processed output true peak is not guaranteed to
+///         remain below the ceiling. Supported sample rates are 8, 11.025, 12,
+///         16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz, plus every rate at or
+///         above 176.4 kHz.
 ///
 /// Raises:
 ///     ValueError: If any configuration value is invalid.
@@ -38,7 +43,8 @@ impl PySFLimiter {
         threshold_dBFS = 0.0,
         attack_ms = 5.0,
         hold_ms = 15.0,
-        release_ms = 40.0
+        release_ms = 40.0,
+        true_peak = false
     ))]
     #[allow(non_snake_case)]
     fn new(
@@ -47,11 +53,19 @@ impl PySFLimiter {
         attack_ms: f64,
         hold_ms: f64,
         release_ms: f64,
+        true_peak: bool,
     ) -> PyResult<Self> {
         let sample_rate = parse_sample_rate(sample_rate)?;
         Ok(Self {
-            inner: SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
-                .map_err(value_error)?,
+            inner: SFLimiter::new(
+                sample_rate,
+                threshold_dBFS,
+                attack_ms,
+                hold_ms,
+                release_ms,
+                true_peak,
+            )
+            .map_err(value_error)?,
         })
     }
 
@@ -60,7 +74,8 @@ impl PySFLimiter {
     /// Args:
     ///     audio: A one-dimensional mono array or a two-dimensional
     ///         multichannel array. Values are converted to ``numpy.float32``;
-    ///         the input is not modified.
+    ///         the input is not modified. Samples must be finite and within the
+    ///         inclusive range ``[-2 ** 32, 2 ** 32]``.
     ///     axis: Frame axis. The default of ``-1`` expects
     ///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``.
     ///         For mono input, ``0`` and ``-1`` are
@@ -75,7 +90,7 @@ impl PySFLimiter {
     /// Raises:
     ///     ValueError: If the input is not one- or two-dimensional, the
     ///         frame axis is invalid, the channel dimension is empty, or an
-    ///         input sample is not finite.
+    ///         input sample is not finite or is outside the supported range.
     #[pyo3(signature = (audio, axis = -1))]
     fn process<'py>(
         &mut self,
@@ -106,6 +121,12 @@ impl PySFLimiter {
     }
 
     #[getter]
+    /// bool: Whether ITU-R BS.1770-5 true-peak limiting is enabled.
+    fn true_peak(&self) -> bool {
+        self.inner.true_peak()
+    }
+
+    #[getter]
     /// int: Look-ahead latency in samples.
     fn lookahead_samples(&self) -> usize {
         self.inner.lookahead_samples()
@@ -132,12 +153,13 @@ impl PySFLimiter {
     fn __repr__(&self) -> String {
         format!(
             "SFLimiter(\
-            \n    sample_rate={}, threshold_dBFS={}, threshold={},\
+            \n    sample_rate={}, threshold_dBFS={}, threshold={}, true_peak={},\
             \n    lookahead_samples={}, hold_samples={}, release_samples={}\
             \n)",
             self.inner.sample_rate(),
             self.inner.threshold_dBFS(),
             self.inner.threshold(),
+            self.inner.true_peak(),
             self.inner.lookahead_samples(),
             self.inner.hold_samples(),
             self.inner.release_samples()
@@ -150,7 +172,8 @@ impl PySFLimiter {
 /// Args:
 ///     audio: A one-dimensional mono array or a two-dimensional multichannel
 ///         array. Values are converted to ``numpy.float32``; the input is not
-///         modified.
+///         modified. Samples must be finite and within the inclusive range
+///         ``[-2 ** 32, 2 ** 32]``.
 ///     sample_rate: Sample rate in hertz. Must be a positive 32-bit integer.
 ///     threshold_dBFS: Output ceiling in dBFS. Must be finite and at most ``0.0``;
 ///         ``0.0`` is full scale and approximately ``-6.02`` is half scale.
@@ -162,6 +185,11 @@ impl PySFLimiter {
 ///         ``(channels, frames)``. Use ``0`` for ``(frames, channels)``. For
 ///         mono input, ``0`` and ``-1`` are
 ///         equivalent.
+///     true_peak: If true, use ITU-R BS.1770-5 true-peak detection to calculate
+///         limiter gain. The processed output true peak is not guaranteed to
+///         remain below the ceiling. Supported sample rates are 8, 11.025, 12,
+///         16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz, plus every rate at or
+///         above 176.4 kHz.
 ///
 /// Returns:
 ///     A tuple ``(audio, frame_gains)``. ``audio`` is a new ``numpy.float32`` array
@@ -170,7 +198,7 @@ impl PySFLimiter {
 ///
 /// Raises:
 ///     ValueError: If a configuration value or input is invalid, or an input
-///         sample is not finite.
+///         sample is not finite or is outside the supported range.
 #[pyfunction]
 #[pyo3(signature = (
     audio,
@@ -179,7 +207,8 @@ impl PySFLimiter {
     attack_ms = 5.0,
     hold_ms = 15.0,
     release_ms = 40.0,
-    axis = -1
+    axis = -1,
+    true_peak = false
 ))]
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
@@ -192,10 +221,18 @@ fn limit<'py>(
     hold_ms: f64,
     release_ms: f64,
     axis: isize,
+    true_peak: bool,
 ) -> PyProcessOutput<'py> {
     let sample_rate = parse_sample_rate(sample_rate)?;
-    let mut limiter = SFLimiter::new(sample_rate, threshold_dBFS, attack_ms, hold_ms, release_ms)
-        .map_err(value_error)?;
+    let mut limiter = SFLimiter::new(
+        sample_rate,
+        threshold_dBFS,
+        attack_ms,
+        hold_ms,
+        release_ms,
+        true_peak,
+    )
+    .map_err(value_error)?;
     process_numpy(py, &mut limiter, audio.as_array(), axis)
 }
 
@@ -222,7 +259,7 @@ fn process_numpy<'py>(
         1 => {
             normalize_axis(axis, 1)?;
             let planar = audio.as_slice().map_or_else(
-                || (0..shape[0]).map(|frame| audio[[frame]]).collect(),
+                || (0..shape[0]).map(|i_frame| audio[[i_frame]]).collect(),
                 <[f32]>::to_vec,
             );
             (planar, 1, None)
@@ -242,9 +279,9 @@ fn process_numpy<'py>(
                 audio.as_slice().map_or_else(
                     || {
                         let mut planar = Vec::with_capacity(audio.len());
-                        for channel in 0..channels {
-                            for frame in 0..frames {
-                                planar.push(audio[[channel, frame]]);
+                        for i_channel in 0..channels {
+                            for i_frame in 0..frames {
+                                planar.push(audio[[i_channel, i_frame]]);
                             }
                         }
                         planar
@@ -253,9 +290,9 @@ fn process_numpy<'py>(
                 )
             } else {
                 let mut planar = Vec::with_capacity(audio.len());
-                for channel in 0..channels {
-                    for frame in 0..frames {
-                        planar.push(audio[[frame, channel]]);
+                for i_channel in 0..channels {
+                    for i_frame in 0..frames {
+                        planar.push(audio[[i_frame, i_channel]]);
                     }
                 }
                 planar
@@ -278,9 +315,19 @@ fn process_numpy<'py>(
         .map_err(|error| match (error, interleaved_shape) {
             (LimiterError::NonFiniteSample { index }, Some((frames, channels))) if frames > 0 => {
                 let channel = index / frames;
-                let frame = index % frames;
+                let i_frame = index % frames;
                 value_error(LimiterError::NonFiniteSample {
-                    index: frame * channels + channel,
+                    index: i_frame * channels + channel,
+                })
+            }
+            (LimiterError::InputSampleOutOfRange { index, value }, Some((frames, channels)))
+                if frames > 0 =>
+            {
+                let channel = index / frames;
+                let i_frame = index % frames;
+                value_error(LimiterError::InputSampleOutOfRange {
+                    index: i_frame * channels + channel,
+                    value,
                 })
             }
             (error, _) => value_error(error),
@@ -299,9 +346,9 @@ fn process_numpy<'py>(
 
 fn planar_to_interleaved(samples: &[f32], frames: usize, channels: usize) -> Vec<f32> {
     let mut interleaved = Vec::with_capacity(samples.len());
-    for frame in 0..frames {
-        for channel in 0..channels {
-            interleaved.push(samples[channel * frames + frame]);
+    for i_frame in 0..frames {
+        for i_channel in 0..channels {
+            interleaved.push(samples[i_channel * frames + i_frame]);
         }
     }
     interleaved

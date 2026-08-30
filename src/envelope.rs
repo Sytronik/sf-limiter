@@ -171,6 +171,9 @@ impl BoxStackFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_relative_eq;
+
+    const TOLERANCE: f64 = 64.0 * f64::EPSILON;
 
     #[test]
     fn moving_minimum_tracks_a_fixed_window() {
@@ -184,6 +187,144 @@ mod tests {
     }
 
     #[test]
+    fn moving_minimum_expires_value_at_window_boundary() {
+        let mut minimum = MovingMinimum::new(3);
+        let output: Vec<_> = [1.0, 4.0, 3.0, 2.0]
+            .into_iter()
+            .map(|value| minimum.step(value))
+            .collect();
+
+        assert_eq!(output, [1.0, 1.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn moving_minimum_with_unit_window_returns_current_value() {
+        let input = [3.0, -1.0, 4.0, 2.0];
+        let mut minimum = MovingMinimum::new(1);
+        let output: Vec<_> = input.into_iter().map(|value| minimum.step(value)).collect();
+
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn moving_minimum_reset_discards_history() {
+        let mut minimum = MovingMinimum::new(4);
+        assert_eq!(minimum.step(0.25), 0.25);
+        assert_eq!(minimum.step(1.0), 0.25);
+
+        minimum.reset();
+
+        assert_eq!(minimum.step(0.75), 0.75);
+    }
+
+    #[test]
+    fn moving_minimum_handles_repeated_minima() {
+        let mut minimum = MovingMinimum::new(3);
+        let output: Vec<_> = [0.5, 0.5, 1.0, 1.0, 1.0]
+            .into_iter()
+            .map(|value| minimum.step(value))
+            .collect();
+
+        assert_eq!(output, [0.5, 0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn exponential_release_reduces_gain_immediately() {
+        let mut release = ExponentialRelease::new(10.0);
+
+        assert_eq!(release.step(0.5), 0.5);
+        assert_eq!(release.step(0.25), 0.25);
+    }
+
+    #[test]
+    fn exponential_release_recovers_with_configured_slew() {
+        let mut release = ExponentialRelease::new(3.0);
+
+        assert_eq!(release.release_samples(), 3.0);
+        assert_eq!(release.step(0.25), 0.25);
+        for expected in [0.4375, 0.578125, 0.68359375] {
+            assert_relative_eq!(
+                release.step(1.0),
+                expected,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
+        }
+    }
+
+    #[test]
+    fn zero_length_release_follows_input_immediately() {
+        let input = [0.25, 0.75, 0.5, 1.0];
+        let mut release = ExponentialRelease::new(0.0);
+        let output: Vec<_> = input.into_iter().map(|value| release.step(value)).collect();
+
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn exponential_release_reset_restores_neutral_state() {
+        let mut release = ExponentialRelease::new(4.0);
+        assert_eq!(release.step(0.2), 0.2);
+        assert!(release.step(1.0) < 1.0);
+
+        release.reset();
+
+        assert_eq!(release.step(1.0), 1.0);
+    }
+
+    #[test]
+    fn box_filter_computes_rolling_average_across_wraparound() {
+        let mut filter = BoxFilter::new(3);
+        filter.reset(0.0);
+        let output: Vec<_> = [3.0, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0]
+            .into_iter()
+            .map(|value| filter.step(value))
+            .collect();
+
+        for (actual, expected) in output.into_iter().zip([1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0]) {
+            assert_relative_eq!(
+                actual,
+                expected,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
+        }
+    }
+
+    #[test]
+    fn box_filter_reset_prefills_history() {
+        let mut filter = BoxFilter::new(4);
+        filter.reset(0.25);
+        assert_relative_eq!(
+            filter.step(1.0),
+            0.4375,
+            epsilon = TOLERANCE,
+            max_relative = TOLERANCE,
+        );
+
+        filter.reset(0.5);
+
+        for _ in 0..8 {
+            assert_relative_eq!(
+                filter.step(0.5),
+                0.5,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
+        }
+    }
+
+    #[test]
+    fn box_filter_with_unit_length_is_identity() {
+        let input = [0.25, -0.5, 1.0, 0.0];
+        let mut filter = BoxFilter::new(1);
+        filter.reset(0.0);
+        let output: Vec<_> = input.into_iter().map(|value| filter.step(value)).collect();
+
+        assert_eq!(output, input);
+    }
+
+    #[test]
     fn three_layer_stack_has_requested_impulse_length() {
         for size in 1..100 {
             let mut filter = BoxStackFilter::new(size);
@@ -194,6 +335,60 @@ mod tests {
 
             assert!(output[..size].iter().all(|value| *value > 0.0));
             assert!(output[size..].iter().all(|value| value.abs() < 1e-15));
+            assert_relative_eq!(
+                output.iter().sum::<f64>(),
+                1.0,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
+        }
+    }
+
+    #[test]
+    fn three_layer_stack_preserves_constant_signal() {
+        for size in [1, 2, 3, 7, 32, 99] {
+            let mut filter = BoxStackFilter::new(size);
+            filter.reset(0.25);
+
+            for _ in 0..size * 2 {
+                assert_relative_eq!(
+                    filter.step(0.25),
+                    0.25,
+                    epsilon = TOLERANCE,
+                    max_relative = TOLERANCE,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unit_size_stack_is_identity() {
+        let input = [0.25, -0.5, 1.0, 0.0];
+        let mut filter = BoxStackFilter::new(1);
+        filter.reset(0.0);
+        let output: Vec<_> = input.into_iter().map(|value| filter.step(value)).collect();
+
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn three_layer_stack_reset_discards_history() {
+        let mut filter = BoxStackFilter::new(11);
+        filter.reset(0.0);
+        filter.step(1.0);
+        for _ in 0..5 {
+            filter.step(0.0);
+        }
+
+        filter.reset(0.75);
+
+        for _ in 0..22 {
+            assert_relative_eq!(
+                filter.step(0.75),
+                0.75,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
         }
     }
 }

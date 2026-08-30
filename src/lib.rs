@@ -478,6 +478,37 @@ mod tests {
     }
 
     #[test]
+    fn gain_envelope_combines_lookahead_and_hold_at_sample_boundaries() {
+        let mut limiter = SFLimiter::new(1_000, 0.0, 1.0, 2.0, 0.0, false).unwrap();
+
+        let frame_gains =
+            limiter.calculate_frame_gains(vec![0.25, 0.25, 0.25, 2.0, 0.25, 0.25, 0.25]);
+
+        assert_eq!(frame_gains, [1.0, 1.0, 0.5, 0.5, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn gain_envelope_releases_monotonically_after_a_peak() {
+        let mut limiter = SFLimiter::new(1_000, 0.0, 1.0, 0.0, 3.0, false).unwrap();
+
+        let frame_gains =
+            limiter.calculate_frame_gains(vec![0.25, 0.25, 2.0, 0.25, 0.25, 0.25, 0.25, 0.25]);
+
+        assert_eq!(frame_gains[..3], [1.0, 0.5, 0.5]);
+        assert_eq!(frame_gains[3], 0.71875);
+        assert!(
+            frame_gains[3..]
+                .windows(2)
+                .all(|window| window[0] < window[1] && window[1] < 1.0)
+        );
+        assert!(
+            frame_gains
+                .iter()
+                .all(|gain| gain.is_finite() && (0.0..=1.0).contains(gain))
+        );
+    }
+
+    #[test]
     fn true_peak_mode_uses_inter_sample_peaks_for_gain_control() {
         let input: Vec<_> = (0..256)
             .map(|index| {

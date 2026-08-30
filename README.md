@@ -194,4 +194,3 @@ channel counts, timing repetitions, and limiter settings.
 - [ ] Refine the Rust API
 - [ ] Add a streaming API
 - [ ] Publish the crate to crates.io
-- [x] Implement an optional true-peak limiter with oversampling

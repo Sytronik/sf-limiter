@@ -467,14 +467,9 @@ mod tests {
     use super::convolve::calc_mirrored_terms;
     use super::*;
     use crate::TRUE_PEAK_SAMPLE_RATE_CASES;
+    use approx::assert_relative_eq;
 
-    fn assert_close(actual: f32, expected: f32, context: &str) {
-        let tolerance = 16.0 * f32::EPSILON * expected.abs().max(1.0);
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{context}: actual={actual}, expected={expected}, tolerance={tolerance}"
-        );
-    }
+    const TOLERANCE: f32 = 16.0 * f32::EPSILON;
 
     fn assert_exact_mirror_symmetry<const TAPS: usize>(
         coefficients: &[f32; TAPS],
@@ -545,10 +540,11 @@ mod tests {
         let four_phase = interpolate_four_phases(&samples);
         let two_phase = interpolate_two_phases(&samples);
 
-        assert_close(
+        assert_relative_eq!(
             four_phase,
             scalar_peak(&samples, &[0, 1, 2, 3]),
-            "four-phase interpolation",
+            epsilon = TOLERANCE,
+            max_relative = TOLERANCE,
         );
         assert_eq!(two_phase, scalar_peak(&samples, &[0, 2]));
     }
@@ -568,8 +564,18 @@ mod tests {
                 .zip(coefficients.iter().rev())
                 .map(|(sample, coefficient)| sample * coefficient)
                 .sum();
-            assert_close(sample, expected, "direct coefficient order");
-            assert_close(mirror_sample, expected_mirror, "reversed coefficient order");
+            assert_relative_eq!(
+                sample,
+                expected,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
+            assert_relative_eq!(
+                mirror_sample,
+                expected_mirror,
+                epsilon = TOLERANCE,
+                max_relative = TOLERANCE,
+            );
         }
 
         let bs1770_samples = std::array::from_fn(|tap| {
@@ -618,10 +624,11 @@ mod tests {
         );
         let mut leading_window = [0.0; BS1770_N_TAPS];
         leading_window[BS1770_CENTER_TAP..BS1770_CENTER_TAP + audio.len()].copy_from_slice(&audio);
-        assert_close(
+        assert_relative_eq!(
             leading_peak,
             scalar_peak(&leading_window, &[0, 1, 2, 3]),
-            "leading boundary",
+            epsilon = TOLERANCE,
+            max_relative = TOLERANCE,
         );
         assert_eq!(accessed_frame_indices, [0, 1, 2, 3]);
 
@@ -638,10 +645,11 @@ mod tests {
         let mut trailing_window = [0.0; BS1770_N_TAPS];
         let trailing_start = BS1770_CENTER_TAP + 1 - audio.len();
         trailing_window[trailing_start..trailing_start + audio.len()].copy_from_slice(&audio);
-        assert_close(
+        assert_relative_eq!(
             trailing_peak,
             scalar_peak(&trailing_window, &[0, 1, 2, 3]),
-            "trailing boundary",
+            epsilon = TOLERANCE,
+            max_relative = TOLERANCE,
         );
         assert_eq!(accessed_frame_indices, [0, 1, 2, 3]);
     }

@@ -18,7 +18,7 @@ relative balance between channels.
 > look-ahead.
 
 > **Note:** The limiter algorithm itself was not AI-generated. Codex was used
-> only to help with API design, documentation, and packaging.
+> only to help with API design, test codes, documentation, and packaging.
 
 ## Python 3.11+
 

@@ -13,8 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tests:
+    name: Validate release
+    uses: ./.github/workflows/tests.yml
+
   verify-version:
     name: Verify release version
+    needs: tests
     runs-on: ubuntu-latest
 
     steps:
@@ -56,17 +61,24 @@ jobs:
   linux:
     name: Linux ${{ matrix.target }}
     needs: verify-version
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
       - name: Build wheel
         uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
@@ -76,6 +88,9 @@ jobs:
           maturin-version: v1.11.5
           sccache: true
           target: ${{ matrix.target }}
+
+      - name: Test installed wheel
+        run: python scripts/test_distribution.py "dist/*.whl"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v5
@@ -114,6 +129,9 @@ jobs:
           sccache: true
           target: ${{ matrix.target }}
 
+      - name: Test installed wheel
+        run: python scripts/test_distribution.py "dist/*.whl"
+
       - name: Upload wheel
         uses: actions/upload-artifact@v5
         with:
@@ -143,6 +161,9 @@ jobs:
           sccache: true
           target: x86_64-pc-windows-msvc
 
+      - name: Test installed wheel
+        run: python scripts/test_distribution.py "dist/*.whl"
+
       - name: Upload wheel
         uses: actions/upload-artifact@v5
         with:
@@ -159,12 +180,23 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build source distribution
         uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
         with:
           args: --out dist
           command: sdist
           maturin-version: v1.11.5
+
+      - name: Test installed source distribution
+        run: python scripts/test_distribution.py "dist/*.tar.gz"
 
       - name: Upload source distribution
         uses: actions/upload-artifact@v5

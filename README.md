@@ -178,6 +178,23 @@ uv sync
 uv run pytest -q
 ```
 
+CI runs the Python suite on Python 3.11–3.14 and Rust tests in debug and
+release profiles. It also builds wheel and source distributions on Linux,
+macOS, and Windows, installs each in a separate temporary environment, and
+runs the Python suite outside the checkout. These tests check installed
+metadata, typing files, public API signatures, and the README Python examples.
+To run the distribution checks locally (requires Python with `venv` and Rust):
+
+```shell
+uv build
+python3 scripts/test_distribution.py "dist/*.whl"
+python3 scripts/test_distribution.py "dist/*.tar.gz"
+```
+
+Each pattern must match exactly one distribution. Release tags run the same
+CI checks, then test every release wheel on its native architecture and
+rebuild/install the release sdist before allowing publication to PyPI.
+
 Compare the Python API performance with
 [`numpy-audio-limiter`](https://github.com/iver56/numpy-audio-limiter):
 

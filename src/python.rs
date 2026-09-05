@@ -91,7 +91,7 @@ impl PySFLimiter {
     ///     ValueError: If the input is not one- or two-dimensional, the
     ///         frame axis is invalid, the channel dimension is empty, or an
     ///         input sample is not finite or is outside the supported range.
-    #[pyo3(signature = (audio, axis = -1))]
+    #[pyo3(signature = (audio, axis = -1), text_signature = "($self, audio, axis=-1)")]
     fn process<'py>(
         &mut self,
         py: Python<'py>,
@@ -209,7 +209,7 @@ impl PySFLimiter {
     release_ms = 40.0,
     axis = -1,
     true_peak = false
-))]
+), text_signature = "(audio, sample_rate, threshold_dBFS=0.0, attack_ms=5.0, hold_ms=15.0, release_ms=40.0, axis=-1, true_peak=False)")]
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 fn limit<'py>(

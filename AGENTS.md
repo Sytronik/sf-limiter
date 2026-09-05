@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The dependency-free Rust limiter core lives in `src/lib.rs`, while gain-envelope primitives are implemented in `src/envelope.rs`. Optional PyO3/NumPy bindings are isolated in `src/python.rs` behind the `python` Cargo feature. Rust integration tests belong in `tests/*.rs`; Python binding tests belong in `tests/test_*.py`. Keep the public Python type declarations in `sf_limiter.pyi` synchronized with binding changes. Package metadata is split between `Cargo.toml` and `pyproject.toml`, and dependency locks are committed in `Cargo.lock` and `uv.lock`. Treat `target/`, `.venv/`, and `dist/` as generated output.
+The dependency-free Rust limiter core lives in `src/lib.rs`, while gain-envelope primitives are implemented in `src/envelope.rs`. Optional PyO3/NumPy bindings are isolated in `src/python.rs` behind the `python` Cargo feature. Rust integration tests belong in `tests/*.rs`; Python binding tests belong in `tests/python/test_*.py`, with shared fixtures in `tests/python/conftest.py`. Keep the public Python type declarations in `sf_limiter.pyi` synchronized with binding changes. Package metadata is split between `Cargo.toml` and `pyproject.toml`, and dependency locks are committed in `Cargo.lock` and `uv.lock`. Treat `target/`, `.venv/`, and `dist/` as generated output.
 
 ## Build, Test, and Development Commands
 

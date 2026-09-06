@@ -8,7 +8,7 @@ description = "A look-ahead brick-wall audio limiter"
 edition = "2024"
 keywords = ["audio", "dsp", "limiter"]
 license = "MIT"
-readme = "README.md"
+readme = "README-rust.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -3,10 +3,11 @@
 [![PyPI version](https://img.shields.io/pypi/v/sf-limiter)](https://pypi.org/project/sf-limiter/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/sf-limiter)](https://pypi.org/project/sf-limiter/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Sytronik/sf-limiter/blob/main/LICENSE)
-<!-- [![Crates.io version](https://img.shields.io/crates/v/sf-limiter)](https://crates.io/crates/sf-limiter) -->
 
 `sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall
-audio limiter with a Rust core and Python bindings for NumPy.
+audio limiter for Python and NumPy, implemented in Rust.
+
+For the Rust crate, see the [Rust documentation](https://github.com/Sytronik/sf-limiter/blob/main/README-rust.md).
 
 It applies one linked gain value to every channel in a frame, preserving the
 relative balance between channels.
@@ -84,56 +85,6 @@ samples must be finite and within the inclusive range `[-2 ** 32, 2 ** 32]`.
 Each call starts from a neutral gain envelope. Non-finite or out-of-range samples
 and invalid configuration values raise `ValueError`.
 
-## Rust
-
-The core Rust API accepts flat `f32` samples in either of these layouts:
-
-- **Frame-interleaved:** each frame contains one sample per channel. Use
-  `process_interleaved` or `process_interleaved_inplace`.
-- **Channel-planar:** all frames of the first channel are followed by all
-  frames of the next channel. Use `process_planar` or
-  `process_planar_inplace`.
-
-For frame-interleaved audio:
-
-```rust
-use sf_limiter::SFLimiter;
-
-let input = [0.0, 0.5, 3.0, -4.0, 0.25];
-let mut limiter = SFLimiter::with_default(48_000)?;
-let output = limiter.process_interleaved(&input, 1)?;
-
-assert!(output.audio.iter().all(|sample| sample.abs() <= 1.0));
-# Ok::<(), sf_limiter::LimiterError>(())
-```
-
-Use `process_interleaved_inplace` to reuse the input allocation. Both methods
-return one linked gain value per frame and reset the envelope on every call.
-
-For channel-planar audio:
-
-```rust
-let mut planar = [0.0, 0.5, 3.0, -4.0, 0.25, -0.25];
-let mut limiter = SFLimiter::with_default(48_000)?;
-let frame_gains = limiter.process_planar_inplace(&mut planar, 2)?;
-
-assert_eq!(frame_gains.len(), 3);
-# Ok::<(), sf_limiter::LimiterError>(())
-```
-
-The Python binding always uses the planar core path. Default two-dimensional
-`axis=-1` input is already planar and is processed directly;
-`(frames, channels)` input is transposed to planar layout for processing and
-then restored to its original layout for the returned array. The interleaved
-core path remains available to Rust callers.
-
-`SFLimiter::new` accepts `true_peak` as its final boolean argument. The
-`with_default` constructor keeps true-peak processing disabled. True-peak
-detection supports 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, 48, 88.2, and 96 kHz,
-as well as 176.4 kHz and higher. Other sample rates are rejected when
-`true_peak` is enabled; sample-peak mode accepts any positive `u32` sample
-rate.
-
 ## Ceiling guarantee
 
 For input samples within `[-2 ** 32, 2 ** 32]`, a valid channel count, and a
@@ -164,14 +115,34 @@ crate with a dependency-free core.
 
 ## Development
 
-Run the Rust tests:
+Developing the Python package requires a Rust toolchain because `uv sync`
+builds the native extension from source. Install the stable toolchain with
+[`rustup`](https://rust-lang.org/tools/install/). On macOS or Linux:
 
 ```shell
-cargo test
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Create the Python environment with the test dependencies, build the extension,
-and run its tests:
+On Windows, use the installer on the same page and install the Visual Studio
+C++ Build Tools when prompted. Restart your terminal after installation so
+that `rustc` and `cargo` are available on `PATH`, then verify:
+
+```shell
+rustc --version
+cargo --version
+```
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+using the instructions for your operating system. Clone the repository and
+change to its root directory:
+
+```shell
+git clone https://github.com/Sytronik/sf-limiter.git
+cd sf-limiter
+```
+
+Run the following commands from the repository root to create the Python
+environment with the test dependencies, build the extension, and run its tests:
 
 ```shell
 uv sync
@@ -210,6 +181,4 @@ channel counts, timing repetitions, and limiter settings.
 
 ## TODO
 
-- [ ] Refine the Rust API
 - [ ] Add a streaming API
-- [ ] Publish the crate to crates.io

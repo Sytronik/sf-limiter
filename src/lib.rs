@@ -1,4 +1,4 @@
-//! A dependency-free look-ahead brick-wall limiter core.
+//! A look-ahead brick-wall limiter with optional runtime SIMD acceleration.
 //!
 //! `SFLimiter` accepts frame-interleaved or channel-planar `f32` audio. It
 //! computes one gain value per frame across every channel, so the stereo image
@@ -7,6 +7,7 @@
 //! The design was informed by Geraint Luff's article
 //! [“Designing a straightforward limiter”](https://signalsmith-audio.co.uk/writing/2022/limiter/).
 
+mod dispatch;
 mod envelope;
 mod layout;
 mod peak;

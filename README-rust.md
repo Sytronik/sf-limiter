@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Sytronik/sf-limiter/blob/main/LICENSE)
 
 `sf-limiter` (short for “straightforward limiter”) is a look-ahead brick-wall
-audio limiter with a dependency-free Rust core.
+audio limiter with optional runtime SIMD acceleration.
 
 For Python and NumPy, see the [Python documentation](https://github.com/Sytronik/sf-limiter/blob/main/README.md).
 
@@ -100,7 +100,7 @@ exponential release, and finite-length cascaded box-filter smoothing.
 
 The Rust implementation was extracted from `limiter.rs` in
 [thesia](https://github.com/Sytronik/thesia) and adapted into a standalone
-crate with a dependency-free core.
+crate with optional runtime SIMD acceleration.
 
 ## Development
 
@@ -112,7 +112,7 @@ cargo fmt -- --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-The default build has no dependencies. The optional `python` feature enables
+The optional `python` feature enables
 PyO3/NumPy bindings; see the [Python documentation](https://github.com/Sytronik/sf-limiter/blob/main/README.md)
 for their development and distribution workflow.
 
@@ -121,3 +121,21 @@ for their development and distribution workflow.
 - [ ] Refine the Rust API
 - [ ] Add a streaming API
 - [ ] Publish the crate to crates.io
+
+## SIMD acceleration
+
+The default `simd` Cargo feature uses `pulp` to select CPU-specific code at
+runtime for FIR interpolation, pre-upsampling, and gain application. Python
+wheels include this feature; no CPU-specific build flags are required. Unsupported
+CPUs use the baseline implementation. SIMD uses the existing auto-vectorizable
+loops, so the compiler determines which operations are vectorized.
+
+Rust users can disable runtime SIMD and its dependencies:
+
+```toml
+sf-limiter = { version = "0.2", default-features = false }
+```
+
+With no features enabled, the Rust core has no external dependencies. Its loops
+can still be auto-vectorized for the chosen compilation target. For portable
+wheels, do not globally enable AVX2 or use `target-cpu=native`.

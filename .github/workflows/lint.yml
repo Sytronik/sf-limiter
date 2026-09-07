@@ -25,6 +25,9 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt -- --check
 
+      - name: Run Clippy without default features
+        run: cargo clippy --all-targets --locked --no-default-features -- -D warnings
+
       - name: Run Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 

@@ -42,21 +42,31 @@ fn apply_frame_gains_to_interleaved(
     channels: usize,
     threshold: f32,
 ) {
-    for (frame, gain) in audio.chunks_exact_mut(channels).zip(frame_gains) {
-        for sample in frame {
-            *sample = (*sample * *gain).clamp(-threshold, threshold);
-        }
-    }
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            for (frame, gain) in audio.chunks_exact_mut(channels).zip(frame_gains) {
+                for sample in frame {
+                    *sample = (*sample * *gain).clamp(-threshold, threshold);
+                }
+            }
+        },
+    )
 }
 
 fn apply_frame_gains_to_planar(audio: &mut [f32], frame_gains: &[f32], threshold: f32) {
-    if frame_gains.is_empty() {
-        return;
-    }
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            if frame_gains.is_empty() {
+                return;
+            }
 
-    for channel in audio.chunks_exact_mut(frame_gains.len()) {
-        for (sample, gain) in channel.iter_mut().zip(frame_gains) {
-            *sample = (*sample * *gain).clamp(-threshold, threshold);
-        }
-    }
+            for channel in audio.chunks_exact_mut(frame_gains.len()) {
+                for (sample, gain) in channel.iter_mut().zip(frame_gains) {
+                    *sample = (*sample * *gain).clamp(-threshold, threshold);
+                }
+            }
+        },
+    )
 }

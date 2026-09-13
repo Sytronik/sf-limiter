@@ -117,15 +117,20 @@ fn convolve_phase(
     frame_peaks: &mut [f32],
     coefficients: &[f32; BS1770_N_TAPS],
 ) {
-    debug_assert_eq!(audio_channel.len(), frame_peaks.len());
-    debug_assert!(audio_channel.len() >= BS1770_N_TAPS);
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            debug_assert_eq!(audio_channel.len(), frame_peaks.len());
+            debug_assert!(audio_channel.len() >= BS1770_N_TAPS);
 
-    let interior_len = audio_channel.len() - (BS1770_N_TAPS - 1);
-    for index in 0..interior_len {
-        let sum = convolve_fir_12!(|tap| audio_channel[index + tap], coefficients);
-        let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
-        *frame_peak = frame_peak.max(sum.abs());
-    }
+            let interior_len = audio_channel.len() - (BS1770_N_TAPS - 1);
+            for index in 0..interior_len {
+                let sum = convolve_fir_12!(|tap| audio_channel[index + tap], coefficients);
+                let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
+                *frame_peak = frame_peak.max(sum.abs());
+            }
+        },
+    )
 }
 
 // The two output phases use reversed coefficient orders. The tap expression is
@@ -136,16 +141,21 @@ fn convolve_mirrored_phases(
     frame_peaks: &mut [f32],
     coeff_pairs: &[(f32, f32); BS1770_N_TAPS / 2],
 ) {
-    debug_assert_eq!(channel_audio.len(), frame_peaks.len());
-    debug_assert!(channel_audio.len() >= BS1770_N_TAPS);
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            debug_assert_eq!(channel_audio.len(), frame_peaks.len());
+            debug_assert!(channel_audio.len() >= BS1770_N_TAPS);
 
-    let interior_len = channel_audio.len() - (BS1770_N_TAPS - 1);
-    for index in 0..interior_len {
-        let (sample, mirror_sample) =
-            convolve_mirrored_fir_12!(|tap| channel_audio[index + tap], coeff_pairs);
-        let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
-        *frame_peak = frame_peak.max(sample.abs()).max(mirror_sample.abs());
-    }
+            let interior_len = channel_audio.len() - (BS1770_N_TAPS - 1);
+            for index in 0..interior_len {
+                let (sample, mirror_sample) =
+                    convolve_mirrored_fir_12!(|tap| channel_audio[index + tap], coeff_pairs);
+                let frame_peak = &mut frame_peaks[index + BS1770_CENTER_TAP];
+                *frame_peak = frame_peak.max(sample.abs()).max(mirror_sample.abs());
+            }
+        },
+    )
 }
 
 fn collect_sample_peaks(audio: &[f32], channels: usize) -> Result<Vec<f32>, LimiterError> {
@@ -243,56 +253,67 @@ fn calculate_mirrored_phase(
     interior_end: usize,
     coeff_pairs: &[(f32, f32); PRE_UPSAMPLE_N_TAPS / 2],
 ) {
-    // Phase p and phase factor-p use reversed coefficients. Pairing mirrored
-    // samples lets both outputs share two products instead of using four.
-    let frame_count = audio.len();
-    let i_mirror_phase = factor - i_phase;
-    debug_assert_eq!(output.len(), frame_count * factor);
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            // Phase p and phase factor-p use reversed coefficients. Pairing mirrored
+            // samples lets both outputs share two products instead of using four.
+            let frame_count = audio.len();
+            let i_mirror_phase = factor - i_phase;
+            debug_assert_eq!(output.len(), frame_count * factor);
 
-    for i_frame in 0..interior_start {
-        let (sample, mirror_sample) = pre_upsample_mirrored_samples(
-            |i_src_frame| audio[i_src_frame],
-            i_frame,
-            frame_count,
-            coeff_pairs,
-        );
-        let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
-        out_frame[i_phase] = sample;
-        out_frame[i_mirror_phase] = mirror_sample;
-    }
-    if interior_start == interior_end {
-        return;
-    }
+            for i_frame in 0..interior_start {
+                let (sample, mirror_sample) = pre_upsample_mirrored_samples(
+                    |i_src_frame| audio[i_src_frame],
+                    i_frame,
+                    frame_count,
+                    coeff_pairs,
+                );
+                let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
+                out_frame[i_phase] = sample;
+                out_frame[i_mirror_phase] = mirror_sample;
+            }
+            if interior_start == interior_end {
+                return;
+            }
 
-    let mut phase_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
-    let mut mirror_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
-    for block_start in (interior_start..interior_end).step_by(PRE_UPSAMPLE_BLOCK_FRAMES) {
-        let block_end = (block_start + PRE_UPSAMPLE_BLOCK_FRAMES).min(interior_end);
-        let block_length = block_end - block_start;
-        let phase_block = &mut phase_out[..block_length];
-        let mirror_block = &mut mirror_out[..block_length];
-        convolve_mirrored_phase_block(audio, phase_block, mirror_block, block_start, coeff_pairs);
-        let output_block = &mut output[block_start * factor..block_end * factor];
-        for (out_frame, (&sample, &mirror_sample)) in output_block
-            .chunks_exact_mut(factor)
-            .zip(phase_block.iter().zip(mirror_block.iter()))
-        {
-            out_frame[i_phase] = sample;
-            out_frame[i_mirror_phase] = mirror_sample;
-        }
-    }
+            let mut phase_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
+            let mut mirror_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
+            for block_start in (interior_start..interior_end).step_by(PRE_UPSAMPLE_BLOCK_FRAMES) {
+                let block_end = (block_start + PRE_UPSAMPLE_BLOCK_FRAMES).min(interior_end);
+                let block_length = block_end - block_start;
+                let phase_block = &mut phase_out[..block_length];
+                let mirror_block = &mut mirror_out[..block_length];
+                convolve_mirrored_phase_block(
+                    audio,
+                    phase_block,
+                    mirror_block,
+                    block_start,
+                    coeff_pairs,
+                );
+                let output_block = &mut output[block_start * factor..block_end * factor];
+                for (out_frame, (&sample, &mirror_sample)) in output_block
+                    .chunks_exact_mut(factor)
+                    .zip(phase_block.iter().zip(mirror_block.iter()))
+                {
+                    out_frame[i_phase] = sample;
+                    out_frame[i_mirror_phase] = mirror_sample;
+                }
+            }
 
-    for i_frame in interior_end..frame_count {
-        let (sample, mirror_sample) = pre_upsample_mirrored_samples(
-            |i_src_frame| audio[i_src_frame],
-            i_frame,
-            frame_count,
-            coeff_pairs,
-        );
-        let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
-        out_frame[i_phase] = sample;
-        out_frame[i_mirror_phase] = mirror_sample;
-    }
+            for i_frame in interior_end..frame_count {
+                let (sample, mirror_sample) = pre_upsample_mirrored_samples(
+                    |i_src_frame| audio[i_src_frame],
+                    i_frame,
+                    frame_count,
+                    coeff_pairs,
+                );
+                let out_frame = &mut output[i_frame * factor..(i_frame + 1) * factor];
+                out_frame[i_phase] = sample;
+                out_frame[i_mirror_phase] = mirror_sample;
+            }
+        },
+    )
 }
 
 // Avoid a call per block and expose consecutive frames to the loop vectorizer.
@@ -338,45 +359,50 @@ fn calculate_symmetric_phase(
     interior_end: usize,
     coefficients: &[f32; PRE_UPSAMPLE_N_TAPS],
 ) {
-    // The half-sample phase is self-symmetric, so each input pair shares one
-    // coefficient and needs one product instead of two.
-    let frame_count = audio.len();
-    debug_assert_eq!(output.len(), frame_count * factor);
-    for i_frame in 0..interior_start {
-        output[i_frame * factor + i_phase] = pre_upsample_symmetric_sample(
-            |i_src_frame| audio[i_src_frame],
-            i_frame,
-            frame_count,
-            coefficients,
-        );
-    }
-    if interior_start == interior_end {
-        return;
-    }
+    crate::dispatch::dispatch(
+        #[inline(always)]
+        move || {
+            // The half-sample phase is self-symmetric, so each input pair shares one
+            // coefficient and needs one product instead of two.
+            let frame_count = audio.len();
+            debug_assert_eq!(output.len(), frame_count * factor);
+            for i_frame in 0..interior_start {
+                output[i_frame * factor + i_phase] = pre_upsample_symmetric_sample(
+                    |i_src_frame| audio[i_src_frame],
+                    i_frame,
+                    frame_count,
+                    coefficients,
+                );
+            }
+            if interior_start == interior_end {
+                return;
+            }
 
-    let mut phase_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
-    for block_start in (interior_start..interior_end).step_by(PRE_UPSAMPLE_BLOCK_FRAMES) {
-        let block_end = (block_start + PRE_UPSAMPLE_BLOCK_FRAMES).min(interior_end);
-        let block_length = block_end - block_start;
-        let phase_block = &mut phase_out[..block_length];
-        convolve_symmetric_phase_block(audio, phase_block, block_start, coefficients);
-        let output_block = &mut output[block_start * factor..block_end * factor];
-        for (out_frame, &sample) in output_block
-            .chunks_exact_mut(factor)
-            .zip(phase_block.iter())
-        {
-            out_frame[i_phase] = sample;
-        }
-    }
+            let mut phase_out = [0.0; PRE_UPSAMPLE_BLOCK_FRAMES];
+            for block_start in (interior_start..interior_end).step_by(PRE_UPSAMPLE_BLOCK_FRAMES) {
+                let block_end = (block_start + PRE_UPSAMPLE_BLOCK_FRAMES).min(interior_end);
+                let block_length = block_end - block_start;
+                let phase_block = &mut phase_out[..block_length];
+                convolve_symmetric_phase_block(audio, phase_block, block_start, coefficients);
+                let output_block = &mut output[block_start * factor..block_end * factor];
+                for (out_frame, &sample) in output_block
+                    .chunks_exact_mut(factor)
+                    .zip(phase_block.iter())
+                {
+                    out_frame[i_phase] = sample;
+                }
+            }
 
-    for i_frame in interior_end..frame_count {
-        output[i_frame * factor + i_phase] = pre_upsample_symmetric_sample(
-            |i_src_frame| audio[i_src_frame],
-            i_frame,
-            frame_count,
-            coefficients,
-        );
-    }
+            for i_frame in interior_end..frame_count {
+                output[i_frame * factor + i_phase] = pre_upsample_symmetric_sample(
+                    |i_src_frame| audio[i_src_frame],
+                    i_frame,
+                    frame_count,
+                    coefficients,
+                );
+            }
+        },
+    )
 }
 
 #[inline(always)]

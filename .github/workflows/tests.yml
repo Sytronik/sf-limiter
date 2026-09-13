@@ -11,8 +11,13 @@ permissions:
 
 jobs:
   rust:
-    name: Rust stable
-    runs-on: ubuntu-latest
+    name: Rust stable (${{ matrix.os }}, ${{ matrix.features }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        features: ["", "--no-default-features"]
 
     steps:
       - name: Check out repository
@@ -22,10 +27,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run Rust tests
-        run: cargo test --locked
+        run: cargo test --locked ${{ matrix.features }}
 
       - name: Run optimized Rust tests
-        run: cargo test --locked --release
+        run: cargo test --locked ${{ matrix.features }} --release
 
   test:
     name: Python ${{ matrix.python-version }}
